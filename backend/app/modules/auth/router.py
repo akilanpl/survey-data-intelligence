@@ -51,7 +51,7 @@ def _set_session_cookie(response: Response, token: str) -> None:
         key=settings.auth_cookie_name,
         value=token,
         httponly=True,
-        samesite="lax",
+        samesite="none",
         secure=bool(settings.auth_cookie_secure),
         max_age=int(settings.auth_token_minutes) * 60,
         path="/",
