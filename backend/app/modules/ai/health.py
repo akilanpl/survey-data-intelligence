@@ -7,10 +7,6 @@ from app.modules.ai.config_status import ai_is_configured, ai_model_configured
 from app.modules.ai.errors import AIUnavailableError
 from app.modules.ai.factory import build_ai_provider
 
-_HEALTH_SYSTEM = 'Return JSON only: {"ok": true}.'
-_HEALTH_USER = '{"ping": true}'
-
-
 def check_ai_health(
     app_settings: Settings | None = None,
     http_client=None,
@@ -27,13 +23,17 @@ def check_ai_health(
     }
     if not configured:
         return payload
-    active = provider if provider is not None else build_ai_provider(cfg, http_client=http_client)
-    if active is None:
-        return payload
     try:
-        result = active.complete_json(system=_HEALTH_SYSTEM, user=_HEALTH_USER)
+        active = provider if provider is not None else build_ai_provider(cfg, http_client=http_client)
+        if active is None:
+            return payload
+        probe = getattr(active, "probe_health", None)
+        if callable(probe):
+            probe()
+        else:
+            active.complete_json(system='Return JSON only: {"ok": true}.', user='{"ping": true}')
         payload["provider_reachable"] = True
-        payload["status"] = "ready" if isinstance(result, dict) else "invalid_response"
+        payload["status"] = "ready"
         return payload
     except AIUnavailableError as exc:
         payload["status"] = exc.reason

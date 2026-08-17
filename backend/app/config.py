@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     esigma_api_key: str = ""
     esigma_timeout_seconds: float = 30
     esigma_mock_mode: bool = True
+    ai_provider: str = ""
     ai_base_url: str = ""
     ai_api_key: str = ""
     ai_model: str = ""

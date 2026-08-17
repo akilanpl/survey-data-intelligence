@@ -10,6 +10,8 @@ from app.modules.ai.errors import AIUnavailableError
 
 _JSON_FENCE = "```"
 _TRANSIENT_STATUS = {429, 500, 502, 503, 504}
+_HEALTH_MAX_TOKENS = 16
+_HEALTH_SKIP_COMPLETION = {404, 405, 501}
 
 
 def _extract_json_text(content: str) -> str:
@@ -77,10 +79,16 @@ class ChatCompletionsProvider:
         self.max_retries = max(0, int(max_retries))
         self.retry_backoff_seconds = max(0.0, float(retry_backoff_seconds))
 
+    def _api_root(self) -> str:
+        root = self.base_url.rstrip("/")
+        if root.endswith("/chat/completions"):
+            return root[: -len("/chat/completions")].rstrip("/")
+        return root
+
     def _endpoint(self) -> str:
-        if self.base_url.endswith("/chat/completions"):
-            return self.base_url
-        return f"{self.base_url}/chat/completions"
+        if self.base_url.rstrip("/").endswith("/chat/completions"):
+            return self.base_url.rstrip("/")
+        return f"{self._api_root()}/chat/completions"
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -92,6 +100,32 @@ class ChatCompletionsProvider:
         if self.retry_backoff_seconds <= 0:
             return
         time.sleep(self.retry_backoff_seconds * (attempt + 1))
+
+    def probe_health(self) -> None:
+        """Lightweight authenticated availability check. Does not call complete_json."""
+        models = self._send_http("GET", f"{self._api_root()}/models")
+        if models.status_code in (401, 403):
+            raise AIUnavailableError("auth", "AI authentication failed")
+        auth_key = self._send_http("GET", f"{self._api_root()}/auth/key")
+        if auth_key.status_code in (401, 403):
+            raise AIUnavailableError("auth", "AI authentication failed")
+        if auth_key.status_code == 200:
+            return
+        if models.status_code == 200 and auth_key.status_code in _HEALTH_SKIP_COMPLETION:
+            return
+        if models.status_code == 200:
+            self._health_completion()
+            return
+        self._raise_http_status(models, allow_format_retry=False)
+
+    def _health_completion(self) -> None:
+        payload = {
+            "model": self.model,
+            "temperature": 0,
+            "max_tokens": _HEALTH_MAX_TOKENS,
+            "messages": [{"role": "user", "content": "ping"}],
+        }
+        self._request(payload, allow_format_retry=False, parse_json_object=False)
 
     def complete_json(self, *, system: str, user: str) -> dict[str, Any]:
         payload = {
@@ -106,12 +140,21 @@ class ChatCompletionsProvider:
         }
         return self._request(payload, allow_format_retry=True)
 
-    def _request(self, payload: dict[str, Any], allow_format_retry: bool) -> dict[str, Any]:
+    def _request(
+        self,
+        payload: dict[str, Any],
+        allow_format_retry: bool,
+        parse_json_object: bool = True,
+    ) -> dict[str, Any]:
         last_error: AIUnavailableError | None = None
         attempts = self.max_retries + 1
         for attempt in range(attempts):
             try:
-                return self._send(payload, allow_format_retry=allow_format_retry)
+                return self._send(
+                    payload,
+                    allow_format_retry=allow_format_retry,
+                    parse_json_object=parse_json_object,
+                )
             except AIUnavailableError as exc:
                 last_error = exc
                 if exc.reason not in {"timeout", "rate_limit", "provider_error"}:
@@ -122,17 +165,18 @@ class ChatCompletionsProvider:
         assert last_error is not None
         raise last_error
 
-    def _send(self, payload: dict[str, Any], allow_format_retry: bool) -> dict[str, Any]:
+    def _send_http(self, method: str, url: str, json_body: dict[str, Any] | None = None) -> httpx.Response:
         client = self._http_client or httpx.Client(timeout=self.timeout_seconds)
         owns_client = self._http_client is None
         try:
             try:
-                response = client.post(
-                    self._endpoint(),
-                    headers=self._headers(),
-                    json=payload,
-                    timeout=self.timeout_seconds,
-                )
+                kwargs: dict[str, Any] = {
+                    "headers": self._headers(),
+                    "timeout": self.timeout_seconds,
+                }
+                if json_body is not None:
+                    kwargs["json"] = json_body
+                return client.request(method, url, **kwargs)
             except httpx.TimeoutException as exc:
                 raise AIUnavailableError("timeout", "AI request timed out") from exc
             except httpx.HTTPError as exc:
@@ -141,30 +185,53 @@ class ChatCompletionsProvider:
             if owns_client:
                 client.close()
 
+    def _raise_http_status(self, response: httpx.Response, *, allow_format_retry: bool, payload: dict[str, Any] | None = None) -> None:
         if response.status_code in (401, 403):
             raise AIUnavailableError("auth", "AI authentication failed")
         if response.status_code in _TRANSIENT_STATUS:
             reason = "rate_limit" if response.status_code == 429 else "provider_error"
             message = "AI rate limit exceeded" if reason == "rate_limit" else "AI request failed"
             raise AIUnavailableError(reason, message)
-        if response.status_code == 400 and allow_format_retry and "response_format" in payload:
-            retry_payload = dict(payload)
-            retry_payload.pop("response_format", None)
-            return self._send(retry_payload, allow_format_retry=False)
+        if (
+            response.status_code == 400
+            and allow_format_retry
+            and payload is not None
+            and "response_format" in payload
+        ):
+            return
         if 400 <= response.status_code < 500:
             raise AIUnavailableError("invalid_response", "AI request failed")
         if response.status_code >= 500:
             raise AIUnavailableError("provider_error", "AI request failed")
 
+    def _send(
+        self,
+        payload: dict[str, Any],
+        allow_format_retry: bool,
+        parse_json_object: bool = True,
+    ) -> dict[str, Any]:
+        response = self._send_http("POST", self._endpoint(), json_body=payload)
+        if (
+            response.status_code == 400
+            and allow_format_retry
+            and "response_format" in payload
+        ):
+            retry_payload = dict(payload)
+            retry_payload.pop("response_format", None)
+            return self._send(retry_payload, allow_format_retry=False, parse_json_object=parse_json_object)
+        self._raise_http_status(response, allow_format_retry=False, payload=payload)
+
         try:
             body = response.json()
         except ValueError as exc:
             raise AIUnavailableError("invalid_response", "AI response was not JSON") from exc
-
         try:
             message = body["choices"][0]["message"]
         except (KeyError, IndexError, TypeError) as exc:
             raise AIUnavailableError("invalid_response", "AI response missing content") from exc
         if not isinstance(message, dict):
             raise AIUnavailableError("invalid_response", "AI response missing content")
+        if not parse_json_object:
+            _message_content(message)
+            return {}
         return _parse_content(_message_content(message))

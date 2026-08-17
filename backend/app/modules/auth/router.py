@@ -48,14 +48,14 @@ def auth_status_payload() -> dict:
 
 def _set_session_cookie(response: Response, token: str) -> None:
     response.set_cookie(
-        key=settings.auth_cookie_name,
-        value=token,
-        httponly=True,
-        samesite="none",
-        secure=bool(settings.auth_cookie_secure),
-        max_age=int(settings.auth_token_minutes) * 60,
-        path="/",
-    )
+    key=settings.auth_cookie_name,
+    value=token,
+    httponly=True,
+    samesite="lax",
+    secure=bool(settings.auth_cookie_secure),
+    max_age=int(settings.auth_token_minutes) * 60,
+    path="/",
+)
 
 
 def _clear_session_cookie(response: Response) -> None:

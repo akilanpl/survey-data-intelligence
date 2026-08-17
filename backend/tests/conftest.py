@@ -8,6 +8,7 @@ os.environ["JWT_SECRET"] = "pytest-jwt-secret-key-must-be-32b"
 os.environ["AI_BASE_URL"] = ""
 os.environ["AI_API_KEY"] = ""
 os.environ["AI_MODEL"] = ""
+os.environ["AI_PROVIDER"] = ""
 os.environ["PIPELINE_SYNC_JOBS"] = "true"
 os.environ["INGEST_REUSE_COMPLETED"] = "false"
 os.environ["MAX_CONCURRENT_PIPELINES"] = "1"
@@ -26,6 +27,7 @@ settings.max_concurrent_pipelines = 1
 settings.ai_base_url = ""
 settings.ai_api_key = ""
 settings.ai_model = ""
+settings.ai_provider = ""
 
 SAMPLES = PROJECT_ROOT / "data" / "samples"
 

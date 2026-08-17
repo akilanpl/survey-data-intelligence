@@ -140,6 +140,69 @@ def test_ai_health_ready_with_mock(monkeypatch) -> None:
     assert "secret-token" not in json.dumps(result)
 
 
+def test_ai_health_probe_does_not_request_generation_max_tokens() -> None:
+    captured: list[tuple[str, str, dict | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content) if request.content else None
+        captured.append((request.method, str(request.url), body))
+        path = str(request.url)
+        if path.endswith("/models"):
+            return httpx.Response(200, json={"data": [{"id": "mock-model"}]})
+        if path.endswith("/auth/key"):
+            return httpx.Response(200, json={"data": {"label": "sk-or-test"}})
+        raise AssertionError("health probe must not call chat completions when auth/key succeeds")
+
+    cfg = Settings(
+        ai_base_url="https://openrouter.ai/api/v1",
+        ai_api_key="secret-token",
+        ai_model="deepseek/deepseek-v4-flash",
+    )
+    provider = ChatCompletionsProvider(
+        base_url=cfg.ai_base_url,
+        api_key=cfg.ai_api_key,
+        model=cfg.ai_model,
+        timeout_seconds=1,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        max_retries=0,
+        retry_backoff_seconds=0,
+    )
+    result = check_ai_health(cfg, provider=provider)
+    assert result["status"] == "ready"
+    assert result["provider_reachable"] is True
+    assert all(item[2] is None or item[2].get("max_tokens") != 20000 for item in captured)
+    assert not any("/chat/completions" in item[1] for item in captured)
+
+
+def test_ai_health_auth_failure_is_not_ready() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = str(request.url)
+        if path.endswith("/models"):
+            return httpx.Response(200, json={"data": []})
+        if path.endswith("/auth/key"):
+            return httpx.Response(401, json={"error": {"message": "invalid"}})
+        return httpx.Response(500)
+
+    cfg = Settings(
+        ai_base_url="https://openrouter.ai/api/v1",
+        ai_api_key="secret-token",
+        ai_model="deepseek/deepseek-v4-flash",
+    )
+    provider = ChatCompletionsProvider(
+        base_url=cfg.ai_base_url,
+        api_key=cfg.ai_api_key,
+        model=cfg.ai_model,
+        timeout_seconds=1,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        max_retries=0,
+        retry_backoff_seconds=0,
+    )
+    result = check_ai_health(cfg, provider=provider)
+    assert result["configured"] is True
+    assert result["status"] == "auth"
+    assert result["status"] != "ready"
+
+
 def test_secret_redaction_in_logs(caplog) -> None:
     with caplog.at_level(logging.INFO):
         log_event(
@@ -159,3 +222,38 @@ def test_secret_redaction_in_logs(caplog) -> None:
     assert "FULL AI RESPONSE" not in caplog.text
     assert "BATCH_SAFE" in caplog.text
     assert "success" in caplog.text
+
+
+def test_gemini_health_ready_without_generation() -> None:
+    from app.modules.ai.gemini import GeminiProvider
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert "generateContent" not in str(request.url)
+        return httpx.Response(200, json={"name": "models/gemini-3.6-flash"})
+
+    cfg = Settings(ai_provider="gemini", ai_api_key="secret-token", ai_model="")
+    provider = GeminiProvider(
+        api_key="secret-token",
+        timeout_seconds=1,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        max_retries=0,
+    )
+    result = check_ai_health(cfg, provider=provider)
+    assert result["configured"] is True
+    assert result["model_configured"] is True
+    assert result["status"] == "ready"
+    assert "secret-token" not in json.dumps(result)
+
+
+def test_invalid_provider_health_is_not_ready() -> None:
+    cfg = Settings(
+        ai_provider="not-a-vendor",
+        ai_api_key="secret-token",
+        ai_base_url="https://example.test",
+        ai_model="x",
+    )
+    result = check_ai_health(cfg)
+    assert result["status"] != "ready"
+    assert result["status"] == "provider_error"
+    assert result["provider_reachable"] is False
