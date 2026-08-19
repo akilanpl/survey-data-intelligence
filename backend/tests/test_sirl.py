@@ -17,7 +17,7 @@ from app.models import (
     VariableProfile,
 )
 from app.modules.ingestion.csv_ingest import ingest_csv_bytes
-from app.modules.sirl.profiler import profile_frame
+from app.modules.sirl.profiler import detect_roles, profile_frame
 from tests.conftest import SAMPLES
 
 
@@ -152,3 +152,17 @@ def test_sirl_rejects_incomplete_batch(client: TestClient) -> None:
         db.close()
     response = client.post(f"/api/sirl/profile/{batch_id}")
     assert response.status_code == 409
+
+
+def test_detect_roles_resolves_respondentid_column() -> None:
+    frame = pd.DataFrame(
+        {
+            "respondentid": ["R1", "R2"],
+            "age": [25, -5],
+            "enumerator_id": ["E1", "E1"],
+            "cluster_id": ["C1", "C1"],
+            "district_code": ["D1", "D1"],
+        }
+    )
+    roles = detect_roles(frame)
+    assert roles.record_id == "respondentid"

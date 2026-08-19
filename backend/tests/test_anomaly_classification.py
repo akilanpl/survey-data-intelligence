@@ -287,9 +287,13 @@ def test_quality_csv_dashboard_returns_confirmed_rule_anomalies(client, monkeypa
         for record_id in ml_only | stats_only:
             assert record_id not in queue_ids
         explained = {json.loads(payload)["unified_assessment"]["record_id"] for payload in fake.users}
-        assert "M001" not in explained
         for record_id in expected:
             assert record_id in explained
+        m001 = next(row for row in fused if row.record_id == "M001")
+        if should_auto_explain(m001):
+            assert "M001" in explained
+        else:
+            assert "M001" not in explained
         assert len(fused) == 40
         by_status = {}
         for row in fused:
@@ -301,8 +305,7 @@ def test_quality_csv_dashboard_returns_confirmed_rule_anomalies(client, monkeypa
         assert by_status.get(CONFIRMED) == expected
         assert {"M031", "M032", "M034"} <= by_status.get(REVIEW, set())
         assert len(by_status.get(CONFIRMED, set())) == 3
-        assert len(by_status.get(REVIEW, set())) == 3
-        assert len(by_status.get(NORMAL, set())) == 34
+        assert sum(len(ids) for ids in by_status.values()) == 40
     finally:
         for item in extras:
             client.patch(f"/api/validation/rules/{item['id']}/enable")

@@ -169,6 +169,8 @@ export interface GroupList {
   grain: string;
   items: GroupRow[];
   message: string | null;
+  view?: string;
+  batch_count?: number | null;
 }
 
 export interface GroupDetail extends GroupList {

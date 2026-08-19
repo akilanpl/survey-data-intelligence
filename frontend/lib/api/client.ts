@@ -57,9 +57,15 @@ export async function apiPostForm<T>(path: string, form: FormData): Promise<T> {
   return request<T>(`${API_BASE_URL}${path}`, { method: "POST", credentials: "include", body: form });
 }
 
-export function reportUrl(kind: string, batchId: string): string {
+export function reportUrl(kind: string, batchId: string, view: string = "current_batch"): string {
   const base = API_BASE_URL || "";
-  return `${base}/api/dashboard/reports/${kind}?batch_id=${encodeURIComponent(batchId)}`;
+  const search = new URLSearchParams();
+  if (view === "cumulative") {
+    search.set("view", "cumulative");
+  } else {
+    search.set("batch_id", batchId);
+  }
+  return `${base}/api/dashboard/reports/${kind}?${search.toString()}`;
 }
 
 export { API_BASE_URL };

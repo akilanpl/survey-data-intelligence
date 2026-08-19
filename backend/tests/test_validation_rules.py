@@ -379,3 +379,33 @@ def test_household_and_unemployed_conditional_rules() -> None:
     assert ("B", "UNEMPLOYED_ZERO_HOURS") in codes
     assert ("C", "UNEMPLOYED_ZERO_HOURS") not in codes
     assert skipped == []
+
+
+def test_evaluate_frame_links_respondentid_column() -> None:
+    frame = pd.DataFrame(
+        {
+            "respondentid": ["R1"],
+            "age": [-5],
+            "enumerator_id": ["E1"],
+            "cluster_id": ["C1"],
+            "district_code": ["D1"],
+        }
+    )
+    db = SessionLocal()
+    try:
+        rules = list(
+            db.scalars(
+                select(ValidationRule).where(
+                    ValidationRule.enabled.is_(True),
+                    ValidationRule.rule_code == "AGE_MIN",
+                )
+            ).all()
+        )
+        lookup = load_reference_lookup(db)
+        rows, skipped = evaluate_frame(frame, rules, lookup)
+    finally:
+        db.close()
+    assert skipped == []
+    assert len(rows) == 1
+    assert rows[0]["record_id"] == "R1"
+    assert rows[0]["rule_code"] == "AGE_MIN"

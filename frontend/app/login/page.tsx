@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useId, useState } from "react";
+import { useId, useState, type FormEvent } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import { AccessInfoTooltip } from "@/components/ui/access-info-tooltip";
 import { InstitutionalMark } from "@/components/brand/institutional-mark";
@@ -25,6 +25,37 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  async function signIn() {
+    if (submitting) return;
+    setError(null);
+    const user = username.trim();
+    if (!user || !password) {
+      setError("The username or password you entered is incorrect.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await login(user, password);
+      const me = await getMe();
+      writeSession({
+        username: me.username,
+        role: me.role,
+        display_name: me.display_name,
+        demo: me.demo,
+      });
+      router.replace("/dashboard");
+    } catch (err) {
+      setError(signInErrorMessage(err));
+      setSubmitting(false);
+    }
+  }
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    void signIn();
+  }
 
   return (
     <div className="sv-portal min-h-screen w-full lg:grid lg:grid-cols-2">
@@ -70,34 +101,7 @@ export default function LoginPage() {
             Access the Survey Data Intelligence platform.
           </p>
 
-          <form
-            className="mt-10 space-y-5"
-            onSubmit={async (event) => {
-              event.preventDefault();
-              if (submitting) return;
-              setError(null);
-              const user = username.trim();
-              if (!user || !password) {
-                setError("The username or password you entered is incorrect.");
-                return;
-              }
-              setSubmitting(true);
-              try {
-                await login(user, password);
-                const me = await getMe();
-                writeSession({
-                  username: me.username,
-                  role: me.role,
-                  display_name: me.display_name,
-                  demo: me.demo,
-                });
-                router.replace("/dashboard");
-              } catch (err) {
-                setError(signInErrorMessage(err));
-                setSubmitting(false);
-              }
-            }}
-          >
+          <form className="mt-10 space-y-5" method="post" onSubmit={handleSubmit}>
             <div>
               <label htmlFor={usernameId} className="text-sm font-medium text-inst-text">
                 Username

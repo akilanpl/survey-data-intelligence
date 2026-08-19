@@ -667,16 +667,16 @@ def _group_missing(profile_json: dict | None) -> float | None:
         return None
 
 
-def group_rows(db: Session, batch_id: str, grain: str) -> list[GroupRow]:
-    fusion = latest_run(db, batch_id, "fusion")
-    if fusion is None:
-        return []
-    assessments = list(
-        db.scalars(
-            select(UnifiedRiskAssessment).where(UnifiedRiskAssessment.validation_run_id == fusion.id)
-        ).all()
-    )
-    hydrate_assessment_rule_codes(db, assessments)
+def group_rows(
+    db: Session,
+    batch_id: str | None,
+    grain: str,
+    *,
+    view: str = "current_batch",
+) -> list[GroupRow]:
+    from app.modules.dashboard.scope import assessments_for_view, fused_batch_ids, is_cumulative
+
+    assessments = assessments_for_view(db, batch_id, view)
     buckets: dict[str, list[UnifiedRiskAssessment]] = {}
     for row in assessments:
         key = {
@@ -690,17 +690,55 @@ def group_rows(db: Session, batch_id: str, grain: str) -> list[GroupRow]:
     missing_map: dict[str, float | None] = {}
     extra_district: dict[str, str | None] = {}
     extra_cluster: dict[str, str | None] = {}
+    profile_filter = True
+    if is_cumulative(view):
+        processed = fused_batch_ids(db)
+        if grain == "enumerator":
+            profile_filter = EnumeratorProfile.batch_id.in_(processed)
+        elif grain == "cluster":
+            profile_filter = ClusterProfile.batch_id.in_(processed)
+        elif grain == "district":
+            profile_filter = DistrictProfile.batch_id.in_(processed)
+    elif batch_id:
+        if grain == "enumerator":
+            profile_filter = EnumeratorProfile.batch_id == batch_id
+        elif grain == "cluster":
+            profile_filter = ClusterProfile.batch_id == batch_id
+        elif grain == "district":
+            profile_filter = DistrictProfile.batch_id == batch_id
+    missing_weight: dict[str, list[tuple[float, int]]] = {}
     if grain == "enumerator":
-        for profile in db.scalars(select(EnumeratorProfile).where(EnumeratorProfile.batch_id == batch_id)).all():
-            missing_map[profile.enumerator_id] = _group_missing(profile.profile_json)
-            extra_district[profile.enumerator_id] = (profile.profile_json or {}).get("related_id")
+        query = select(EnumeratorProfile)
+        if profile_filter is not True:
+            query = query.where(profile_filter)
+        for profile in db.scalars(query).all():
+            rate = _group_missing(profile.profile_json)
+            extra_district.setdefault(profile.enumerator_id, (profile.profile_json or {}).get("related_id"))
+            if rate is not None:
+                missing_weight.setdefault(profile.enumerator_id, []).append((rate, int(profile.record_count or 0)))
     elif grain == "cluster":
-        for profile in db.scalars(select(ClusterProfile).where(ClusterProfile.batch_id == batch_id)).all():
-            missing_map[profile.cluster_id] = _group_missing(profile.profile_json)
-            extra_district[profile.cluster_id] = profile.district_id
+        query = select(ClusterProfile)
+        if profile_filter is not True:
+            query = query.where(profile_filter)
+        for profile in db.scalars(query).all():
+            rate = _group_missing(profile.profile_json)
+            extra_district.setdefault(profile.cluster_id, profile.district_id)
+            if rate is not None:
+                missing_weight.setdefault(profile.cluster_id, []).append((rate, int(profile.record_count or 0)))
     elif grain == "district":
-        for profile in db.scalars(select(DistrictProfile).where(DistrictProfile.batch_id == batch_id)).all():
-            missing_map[profile.district_id] = _group_missing(profile.profile_json)
+        query = select(DistrictProfile)
+        if profile_filter is not True:
+            query = query.where(profile_filter)
+        for profile in db.scalars(query).all():
+            rate = _group_missing(profile.profile_json)
+            if rate is not None:
+                missing_weight.setdefault(profile.district_id, []).append((rate, int(profile.record_count or 0)))
+    for key, parts in missing_weight.items():
+        weight = sum(count for _rate, count in parts)
+        if weight:
+            missing_map[key] = sum(rate * count for rate, count in parts) / weight
+        elif parts:
+            missing_map[key] = sum(rate for rate, _count in parts) / len(parts)
     items = []
     for key, rows in sorted(buckets.items()):
         high = sum(1 for row in rows if is_confirmed_anomaly(row) and str(row.severity or "").upper() == "HIGH")
@@ -774,38 +812,47 @@ def group_detail(db: Session, batch_id: str, grain: str, group_id: str) -> dict:
 
 def report_rows(
     db: Session,
-    batch_id: str,
+    batch_id: str | None,
     kind: str,
     *,
     allowed_districts: list[str] | None = None,
+    view: str = "current_batch",
 ) -> tuple[list[str], list[list[str]], dict[str, str]]:
     from datetime import UTC, datetime
 
     from app.models import Investigation
+    from app.modules.dashboard.scope import (
+        CUMULATIVE_LABEL,
+        VIEW_CUMULATIVE,
+        assessments_for_view,
+        fused_batch_count,
+        is_cumulative,
+    )
 
-    fusion = latest_run(db, batch_id, "fusion")
     generated = datetime.now(UTC).isoformat()
     methodology = settings.fusion_methodology_version
+    cumulative = is_cumulative(view)
     meta = {
-        "batch_id": batch_id,
+        "batch_id": "ALL" if cumulative else str(batch_id or ""),
+        "view": VIEW_CUMULATIVE if cumulative else "current_batch",
         "report_type": kind,
         "generated_at": generated,
         "methodology_version": methodology,
         "data_classification": "SYNTHETIC_DEMO",
     }
-    if fusion is None and kind != "investigations":
+    if cumulative:
+        meta["scope_label"] = CUMULATIVE_LABEL
+        meta["batch_count"] = str(fused_batch_count(db))
+    assessments = assessments_for_view(db, batch_id, view)
+    if allowed_districts is not None:
+        assessments = [row for row in assessments if (row.district_id or "") in allowed_districts]
+    if not assessments and kind != "investigations":
         return ["message"], [["Fusion assessment is not available."]], meta
-    assessments = []
-    if fusion is not None:
-        assessments = list(
-            db.scalars(select(UnifiedRiskAssessment).where(UnifiedRiskAssessment.validation_run_id == fusion.id)).all()
-        )
-        hydrate_assessment_rule_codes(db, assessments)
-        if allowed_districts is not None:
-            assessments = [row for row in assessments if (row.district_id or "") in allowed_districts]
+    explanation_query = select(AiExplanation)
+    if not cumulative and batch_id:
+        explanation_query = explanation_query.where(AiExplanation.batch_id == batch_id)
     explanations = {
-        row.record_id: row
-        for row in db.scalars(select(AiExplanation).where(AiExplanation.batch_id == batch_id)).all()
+        (row.batch_id, row.record_id): row for row in db.scalars(explanation_query).all()
     }
     extra = ["report_type", "generated_at", "methodology_version"]
     extra_vals = [kind, generated, methodology]
@@ -842,7 +889,7 @@ def report_rows(
                 row.cluster_id or "",
                 row.district_id or "",
                 "|".join(row.available_sources_json or []),
-                display_status(explanations.get(row.record_id), detected=should_auto_explain(row)),
+                display_status(explanations.get((row.batch_id, row.record_id)), detected=should_auto_explain(row)),
                 *extra_vals,
             ]
             for row in assessments
@@ -861,7 +908,7 @@ def report_rows(
                 "" if item.missingness_rate is None else str(item.missingness_rate),
                 *extra_vals,
             ]
-            for item in group_rows(db, batch_id, "enumerator")
+            for item in group_rows(db, batch_id, "enumerator", view=view)
         ]
         return header, lines, meta
     if kind == "districts":
@@ -875,15 +922,17 @@ def report_rows(
                 str(item.enumerators or 0),
                 *extra_vals,
             ]
-            for item in group_rows(db, batch_id, "district")
+            for item in group_rows(db, batch_id, "district", view=view)
         ]
         return header, lines, meta
     if kind == "investigations":
-        query = select(Investigation).where(Investigation.batch_id == batch_id)
+        query = select(Investigation)
+        if not cumulative and batch_id:
+            query = query.where(Investigation.batch_id == batch_id)
         if allowed_districts is not None:
             query = query.where(Investigation.district_id.in_(allowed_districts))
         cases = list(db.scalars(query.order_by(Investigation.id.asc())).all())
-        by_record = {row.record_id: row for row in assessments}
+        by_record = {(row.batch_id, row.record_id): row for row in assessments}
         header = [
             "batch_id",
             "record_id",
@@ -903,8 +952,8 @@ def report_rows(
             [
                 item.batch_id,
                 item.record_id,
-                "" if by_record.get(item.record_id) is None else str(by_record[item.record_id].risk_score),
-                "" if by_record.get(item.record_id) is None else by_record[item.record_id].severity,
+                "" if by_record.get((item.batch_id, item.record_id)) is None else str(by_record[(item.batch_id, item.record_id)].risk_score),
+                "" if by_record.get((item.batch_id, item.record_id)) is None else by_record[(item.batch_id, item.record_id)].severity,
                 item.status,
                 item.assigned_to or "",
                 item.action or "",

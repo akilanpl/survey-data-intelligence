@@ -169,6 +169,8 @@ class GroupListResponse(BaseModel):
     grain: str
     items: list[GroupRow] = Field(default_factory=list)
     message: str | None = None
+    view: str = "current_batch"
+    batch_count: int | None = None
 
 
 class GroupDetailResponse(GroupListResponse):

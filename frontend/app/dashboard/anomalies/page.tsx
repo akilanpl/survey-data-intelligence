@@ -35,6 +35,8 @@ const AGREEMENT_LABELS: Record<string, string> = {
   insufficient: "Insufficient",
 };
 
+const DEFAULT_QUEUE_SCOPE = "review_and_confirmed";
+
 const SCOPE_LABELS: Record<string, string> = {
   confirmed: "Confirmed",
   review: "Review",
@@ -49,6 +51,13 @@ function humanize(value: string | null | undefined): string {
 
 function sourceLabel(value: string): string {
   return SOURCE_LABELS[value] ?? humanize(value);
+}
+
+type QueueColumnMeta = { width: number; wrapHeader?: boolean };
+
+function queueMeta(column: { columnDef: { meta?: unknown } }): QueueColumnMeta {
+  const meta = column.columnDef.meta as QueueColumnMeta | undefined;
+  return { width: meta?.width ?? 110, wrapHeader: Boolean(meta?.wrapHeader) };
 }
 
 export default function AnomaliesPage() {
@@ -79,7 +88,7 @@ function AnomaliesQueue({ batchId }: { batchId: string }) {
   const [investigation, setInvestigation] = useState("");
   const [classification, setClassification] = useState("");
   const [detector, setDetector] = useState(search.get("detector") ?? "");
-  const [scope, setScope] = useState(search.get("scope") ?? "confirmed");
+  const [scope, setScope] = useState(search.get("scope") ?? DEFAULT_QUEUE_SCOPE);
   const [moreFilters, setMoreFilters] = useState(false);
 
   const query = useQuery({
@@ -97,7 +106,7 @@ function AnomaliesQueue({ batchId }: { batchId: string }) {
         q: q || undefined,
         detector_type: detector || undefined,
         classification: classification || undefined,
-        classification_scope: scope || "confirmed",
+        classification_scope: scope || DEFAULT_QUEUE_SCOPE,
       }),
     enabled: Boolean(batchId),
     retry: false,
@@ -135,6 +144,7 @@ function AnomaliesQueue({ batchId }: { batchId: string }) {
     () => [
       helper.accessor("record_id", {
         header: "ID",
+        meta: { width: 70 } satisfies QueueColumnMeta,
         cell: (info) => (
           <Link
             className="font-semibold text-inst-blue hover:underline"
@@ -146,6 +156,7 @@ function AnomaliesQueue({ batchId }: { batchId: string }) {
       }),
       helper.accessor("risk_score", {
         header: "Risk",
+        meta: { width: 100 } satisfies QueueColumnMeta,
         cell: (info) => {
           const score = info.getValue();
           return (
@@ -160,19 +171,23 @@ function AnomaliesQueue({ batchId }: { batchId: string }) {
       }),
       helper.accessor("intelligence_classification", {
         header: "Classification",
+        meta: { width: 150, wrapHeader: true } satisfies QueueColumnMeta,
         cell: (info) => <AnomalyClassification value={info.getValue()} />,
       }),
       helper.accessor("primary_detector", {
         header: "Primary signal",
+        meta: { width: 150, wrapHeader: true } satisfies QueueColumnMeta,
         cell: (info) => <DetectorBadge value={info.getValue()} />,
       }),
       helper.accessor("anomaly_status", {
         header: "Status",
+        meta: { width: 110 } satisfies QueueColumnMeta,
         cell: (info) => <span className="text-sm font-medium text-inst-navy">{humanize(info.getValue())}</span>,
       }),
       helper.accessor("available_sources", {
         id: "evidence",
         header: "Evidence",
+        meta: { width: 150 } satisfies QueueColumnMeta,
         cell: (info) => {
           const sources = info.getValue() ?? [];
           if (!sources.length) return <span className="text-inst-text-secondary">—</span>;
@@ -187,10 +202,14 @@ function AnomaliesQueue({ batchId }: { batchId: string }) {
           );
         },
       }),
-      helper.accessor("investigation", { header: "Investigation" }),
+      helper.accessor("investigation", {
+        header: "Investigation",
+        meta: { width: 120, wrapHeader: true } satisfies QueueColumnMeta,
+      }),
       helper.display({
         id: "location",
         header: "Location",
+        meta: { width: 100 } satisfies QueueColumnMeta,
         cell: (info) => {
           const district = info.row.original.district_id;
           const cluster = info.row.original.cluster_id;
@@ -198,16 +217,26 @@ function AnomaliesQueue({ batchId }: { batchId: string }) {
           return [district, cluster].filter(Boolean).join(" · ");
         },
       }),
-      helper.accessor("enumerator_id", { header: "Enumerator", cell: (info) => info.getValue() ?? "—" }),
-      helper.accessor("cluster_id", { header: "Cluster", cell: (info) => info.getValue() ?? "—" }),
+      helper.accessor("enumerator_id", {
+        header: "Enumerator",
+        meta: { width: 110, wrapHeader: true } satisfies QueueColumnMeta,
+        cell: (info) => info.getValue() ?? "—",
+      }),
+      helper.accessor("cluster_id", {
+        header: "Cluster",
+        meta: { width: 100 } satisfies QueueColumnMeta,
+        cell: (info) => info.getValue() ?? "—",
+      }),
       helper.accessor("district_id", {
         id: "district",
         header: "District",
+        meta: { width: 100 } satisfies QueueColumnMeta,
         cell: (info) => info.getValue() ?? "—",
       }),
       helper.accessor("detectors", {
         id: "detected_by",
         header: "Detected by",
+        meta: { width: 110, wrapHeader: true } satisfies QueueColumnMeta,
         cell: (info) => {
           const detectors = info.getValue() ?? [];
           if (!detectors.length) return <span className="text-inst-text-secondary">—</span>;
@@ -222,10 +251,12 @@ function AnomaliesQueue({ batchId }: { batchId: string }) {
       }),
       helper.accessor("agreement", {
         header: "Agreement",
+        meta: { width: 100 } satisfies QueueColumnMeta,
         cell: (info) => AGREEMENT_LABELS[info.getValue()] ?? humanize(info.getValue()),
       }),
       helper.accessor("ai_explanation_status", {
         header: "AI status",
+        meta: { width: 110, wrapHeader: true } satisfies QueueColumnMeta,
         cell: (info) => <span className="text-xs text-inst-text-secondary">{aiStatusLabel(info.getValue())}</span>,
       }),
     ],
@@ -234,7 +265,7 @@ function AnomaliesQueue({ batchId }: { batchId: string }) {
 
   const table = useReactTable({ data: rows, columns, getCoreRowModel: getCoreRowModel() });
   const filtersActive = Boolean(
-    severity || agreement || minRisk || source || aiStatus || q || detector || classification || investigation || (scope && scope !== "confirmed")
+    severity || agreement || minRisk || source || aiStatus || q || detector || classification || investigation || (scope && scope !== DEFAULT_QUEUE_SCOPE)
   );
 
   function clearFilters() {
@@ -247,7 +278,7 @@ function AnomaliesQueue({ batchId }: { batchId: string }) {
     setInvestigation("");
     setClassification("");
     setDetector("");
-    setScope("confirmed");
+    setScope(DEFAULT_QUEUE_SCOPE);
     setPage(1);
   }
 
@@ -260,9 +291,8 @@ function AnomaliesQueue({ batchId }: { batchId: string }) {
         <p className="sv-label">Review queue</p>
         <h1 className="mt-1 text-2xl font-semibold text-inst-navy">Quality investigation queue</h1>
         <p className="mt-2 max-w-3xl text-sm leading-6 text-inst-text-secondary">
-          Records flagged by validation rules and corroborated quality signals for supervisor review. Each record
-          includes the signals and evidence that led to the review. AI can explain findings; it does not make the
-          final decision.
+          Confirmed validation issues and REVIEW records that still need human attention. Each record includes the
+          signals and evidence that led to the review. AI can explain findings; it does not make the final decision.
         </p>
       </div>
 
@@ -308,9 +338,9 @@ function AnomaliesQueue({ batchId }: { batchId: string }) {
             aria-label="Search record ID"
           />
           <select className="sv-control" value={scope} onChange={(event) => setScope(event.target.value)} aria-label="Queue scope">
+            <option value="review_and_confirmed">Review + confirmed</option>
             <option value="confirmed">Confirmed</option>
             <option value="review">Review</option>
-            <option value="review_and_confirmed">Review + confirmed</option>
             <option value="all">All records</option>
           </select>
           <select className="sv-control" value={classification} onChange={(event) => setClassification(event.target.value)} aria-label="Classification">
@@ -392,7 +422,7 @@ function AnomaliesQueue({ batchId }: { batchId: string }) {
         ) : null}
         {filtersActive ? (
           <div className="flex flex-wrap gap-2">
-            {scope !== "confirmed" ? <span className="sv-chip-active">Scope: {SCOPE_LABELS[scope] ?? scope}</span> : null}
+            {scope !== DEFAULT_QUEUE_SCOPE ? <span className="sv-chip-active">Scope: {SCOPE_LABELS[scope] ?? scope}</span> : null}
             {classification ? <span className="sv-chip-active">Classification: {humanize(classification)}</span> : null}
             {detector ? <span className="sv-chip-active">Detector: {detector}</span> : null}
             {severity ? <span className="sv-chip-active">Severity: {severity}</span> : null}
@@ -420,13 +450,32 @@ function AnomaliesQueue({ batchId }: { batchId: string }) {
       {query.isSuccess && query.data?.available ? (
         <>
           <div className="sv-card overflow-x-auto">
-            <table className="sv-table">
+            <table className="sv-table w-max !min-w-[1680px]">
+              <colgroup>
+                {table.getAllLeafColumns().map((column) => {
+                  const { width } = queueMeta(column);
+                  return <col key={column.id} style={{ width: `${width}px`, minWidth: `${width}px` }} />;
+                })}
+              </colgroup>
               <thead>
                 {table.getHeaderGroups().map((group) => (
                   <tr key={group.id}>
-                    {group.headers.map((header) => (
-                      <th key={header.id}>{flexRender(header.column.columnDef.header, header.getContext())}</th>
-                    ))}
+                    {group.headers.map((header) => {
+                      const meta = queueMeta(header.column);
+                      return (
+                        <th
+                          key={header.id}
+                          style={{ width: `${meta.width}px`, minWidth: `${meta.width}px` }}
+                          className={
+                            meta.wrapHeader
+                              ? "box-border whitespace-normal break-words leading-tight"
+                              : "box-border whitespace-nowrap"
+                          }
+                        >
+                          {flexRender(header.column.columnDef.header, header.getContext())}
+                        </th>
+                      );
+                    })}
                   </tr>
                 ))}
               </thead>
@@ -442,9 +491,18 @@ function AnomaliesQueue({ batchId }: { batchId: string }) {
                 ) : (
                   table.getRowModel().rows.map((row) => (
                     <tr key={row.id}>
-                      {row.getVisibleCells().map((cell) => (
-                        <td key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</td>
-                      ))}
+                      {row.getVisibleCells().map((cell) => {
+                        const meta = queueMeta(cell.column);
+                        return (
+                          <td
+                            key={cell.id}
+                            style={{ width: `${meta.width}px`, minWidth: `${meta.width}px` }}
+                            className="box-border overflow-hidden text-ellipsis whitespace-nowrap"
+                          >
+                            {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                          </td>
+                        );
+                      })}
                     </tr>
                   ))
                 )}

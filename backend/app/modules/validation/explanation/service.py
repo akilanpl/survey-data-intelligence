@@ -15,7 +15,7 @@ from app.models import Batch, BatchStatus, RecordProfile, UnifiedRiskAssessment,
 from app.modules.ai.errors import AIUnavailableError
 from app.modules.ai.factory import build_ai_provider
 from app.modules.ingestion.logging_utils import log_event, log_failure
-from app.modules.sirl.profiler import RECORD_ID_CANDIDATES
+from app.modules.sirl.profiler import RECORD_ID_CANDIDATES, _first_present
 from app.modules.storage.parquet import ParquetStorage
 from app.modules.validation.errors import ValidationError
 from app.modules.validation.explanation.prompts import SYSTEM_PROMPT
@@ -118,7 +118,7 @@ def _parquet_record_ids(batch_id: str) -> list[str]:
 
         path = store.absolute_path(batch_id)
         names = pq.read_schema(path).names
-        column = next((item for item in RECORD_ID_CANDIDATES if item in names), None)
+        column = _first_present(list(names), RECORD_ID_CANDIDATES)
         if column is None:
             return []
         values = pq.read_table(path, columns=[column]).column(column).to_pylist()

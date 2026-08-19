@@ -91,8 +91,11 @@ export async function runBatchExplanations(
   return apiPost(`/api/validation/explanations/run/${encodeURIComponent(batchId)}`, body ?? {});
 }
 
-export async function getEnumerators(batchId?: string | null): Promise<GroupList> {
-  const suffix = batchId ? `?batch_id=${encodeURIComponent(batchId)}` : "";
+export async function getEnumerators(batchId?: string | null, view: string = "current_batch"): Promise<GroupList> {
+  const search = new URLSearchParams();
+  if (view === "cumulative") search.set("view", "cumulative");
+  else if (batchId) search.set("batch_id", batchId);
+  const suffix = search.toString() ? `?${search.toString()}` : "";
   return apiGet(`/api/dashboard/enumerators${suffix}`);
 }
 
@@ -101,13 +104,19 @@ export async function getEnumerator(id: string, batchId?: string | null): Promis
   return apiGet(`/api/dashboard/enumerators/${encodeURIComponent(id)}${suffix}`);
 }
 
-export async function getClusters(batchId?: string | null): Promise<GroupList> {
-  const suffix = batchId ? `?batch_id=${encodeURIComponent(batchId)}` : "";
+export async function getClusters(batchId?: string | null, view: string = "current_batch"): Promise<GroupList> {
+  const search = new URLSearchParams();
+  if (view === "cumulative") search.set("view", "cumulative");
+  else if (batchId) search.set("batch_id", batchId);
+  const suffix = search.toString() ? `?${search.toString()}` : "";
   return apiGet(`/api/dashboard/clusters${suffix}`);
 }
 
-export async function getDistricts(batchId?: string | null): Promise<GroupList> {
-  const suffix = batchId ? `?batch_id=${encodeURIComponent(batchId)}` : "";
+export async function getDistricts(batchId?: string | null, view: string = "current_batch"): Promise<GroupList> {
+  const search = new URLSearchParams();
+  if (view === "cumulative") search.set("view", "cumulative");
+  else if (batchId) search.set("batch_id", batchId);
+  const suffix = search.toString() ? `?${search.toString()}` : "";
   return apiGet(`/api/dashboard/districts${suffix}`);
 }
 
@@ -192,17 +201,28 @@ export async function patchDetector(detectorId: string, body: { enabled?: boolea
   return apiPatch(`/api/detectors/${encodeURIComponent(detectorId)}`, body);
 }
 
-export async function getTemporalAnalytics(batchId?: string | null) {
-  const suffix = batchId ? `?batch_id=${encodeURIComponent(batchId)}` : "";
+export async function getTemporalAnalytics(batchId?: string | null, view: string = "current_batch") {
+  const search = new URLSearchParams();
+  if (view === "cumulative") search.set("view", "cumulative");
+  else if (batchId) search.set("batch_id", batchId);
+  const suffix = search.toString() ? `?${search.toString()}` : "";
   return apiGet(`/api/analytics/temporal${suffix}`);
 }
 
-export async function getDetectorAnalytics(batchId?: string | null) {
-  const suffix = batchId ? `?batch_id=${encodeURIComponent(batchId)}` : "";
+export async function getDetectorAnalytics(batchId?: string | null, view: string = "current_batch") {
+  const search = new URLSearchParams();
+  if (view === "cumulative") search.set("view", "cumulative");
+  else if (batchId) search.set("batch_id", batchId);
+  const suffix = search.toString() ? `?${search.toString()}` : "";
   return apiGet(`/api/analytics/detectors${suffix}`);
 }
 
-export async function getExplorer(params: { batch_id?: string; variable?: string; level?: string }) {
+export async function getExplorer(params: {
+  batch_id?: string;
+  variable?: string;
+  level?: string;
+  view?: string;
+}) {
   const search = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {
     if (value) search.set(key, value);

@@ -62,7 +62,7 @@ export default function SettingsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <p className="sv-label">Settings</p>
+        <p className="sv-label">Environment</p>
         <h1 className="mt-1 text-2xl font-semibold text-inst-navy">Workspace & system</h1>
         <p className="mt-2 max-w-3xl text-sm leading-6 text-inst-text-secondary">
           System status, authentication context, and security information for this workspace.
@@ -94,12 +94,12 @@ export default function SettingsPage() {
 
           <dl className="mt-4 divide-y divide-inst-border border-y border-inst-border">
             {demoMode ? (
-              <InfoRow label="Environment" value="DEMO MODE" />
+              <InfoRow label="Environment" value="Walkthrough" />
             ) : null}
             <InfoRow label="User" value={session?.username ?? "…"} />
             <InfoRow label="Role" value={session?.role ?? "…"} />
             {demoMode ? (
-              <InfoRow label="Authentication" value="Offline / demo authentication" />
+              <InfoRow label="Authentication" value="Walkthrough authentication" />
             ) : null}
           </dl>
 
@@ -220,10 +220,9 @@ export default function SettingsPage() {
           <div className="flex items-start gap-3">
             <Info className="mt-0.5 h-4 w-4 shrink-0 text-inst-blue" aria-hidden="true" />
             <div>
-              <p className="text-sm font-semibold text-inst-navy">Demo environment</p>
+              <p className="text-sm font-semibold text-inst-navy">Walkthrough environment</p>
               <p className="mt-1 text-sm leading-6 text-inst-navy">
-                This workspace is configured for offline hackathon judging. Authentication and service
-                integrations are represented by the current demo environment configuration.
+                This workspace is optimized for hackathon evaluation, with authentication and service integrations managed through the configured environment.
               </p>
             </div>
           </div>

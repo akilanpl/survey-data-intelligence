@@ -10,11 +10,17 @@ import { BatchSelectionGate } from "@/components/shell";
 import { EmptyState, ErrorState } from "@/components/status";
 import { getClusters, getDistricts, getEnumerators } from "@/lib/api";
 import type { GroupRow } from "@/lib/api/types";
+import type { DataView } from "@/lib/data-view";
+import { DATA_VIEW_CURRENT, isCumulativeView } from "@/lib/data-view";
 
-export function EnumeratorTable() {
+function listQueryKey(grain: string, view: DataView, batchId: string) {
+  return isCumulativeView(view) ? [grain, "cumulative"] : [grain, batchId];
+}
+
+export function EnumeratorTable({ view = DATA_VIEW_CURRENT }: { view?: DataView }) {
   return (
     <BatchSelectionGate emptyDetail="Ingest data before reviewing enumerators.">
-      {(batchId) => <EnumeratorTableInner batchId={batchId} />}
+      {(batchId) => <EnumeratorTableInner batchId={batchId} view={view} />}
     </BatchSelectionGate>
   );
 }
@@ -41,10 +47,10 @@ function countClass(value: number, tone: "critical" | "warning"): string {
   return tone === "critical" ? "sv-num font-semibold text-inst-critical" : "sv-num font-semibold text-inst-warning";
 }
 
-function EnumeratorTableInner({ batchId }: { batchId: string }) {
+function EnumeratorTableInner({ batchId, view }: { batchId: string; view: DataView }) {
   const query = useQuery({
-    queryKey: ["enumerators", batchId],
-    queryFn: () => getEnumerators(batchId),
+    queryKey: listQueryKey("enumerators", view, batchId),
+    queryFn: () => getEnumerators(batchId, view),
     retry: false,
   });
   if (query.isPending) {
@@ -69,7 +75,18 @@ function EnumeratorTableInner({ batchId }: { batchId: string }) {
     return <EmptyState title="Unavailable" detail={query.data.message || "Enumerator summary is not available for this batch."} />;
   }
   const items = query.data?.items ?? [];
-  if (!items.length) return <EmptyState title="No enumerators" detail="No enumerator profiles for this batch." />;
+  if (!items.length) {
+    return (
+      <EmptyState
+        title="No enumerators"
+        detail={
+          isCumulativeView(view)
+            ? "No enumerator profiles across processed batches."
+            : "No enumerator profiles for this batch."
+        }
+      />
+    );
+  }
 
   const records = items.reduce((sum, row) => sum + row.records, 0);
   const high = items.reduce((sum, row) => sum + row.high_risk, 0);
@@ -191,18 +208,18 @@ function EnumeratorTableInner({ batchId }: { batchId: string }) {
   );
 }
 
-export function ClusterTable() {
+export function ClusterTable({ view = DATA_VIEW_CURRENT }: { view?: DataView }) {
   return (
     <BatchSelectionGate emptyDetail="Ingest data before reviewing clusters.">
-      {(batchId) => <ClusterTableInner batchId={batchId} />}
+      {(batchId) => <ClusterTableInner batchId={batchId} view={view} />}
     </BatchSelectionGate>
   );
 }
 
-function ClusterTableInner({ batchId }: { batchId: string }) {
+function ClusterTableInner({ batchId, view }: { batchId: string; view: DataView }) {
   const query = useQuery({
-    queryKey: ["clusters", batchId],
-    queryFn: () => getClusters(batchId),
+    queryKey: listQueryKey("clusters", view, batchId),
+    queryFn: () => getClusters(batchId, view),
     retry: false,
   });
   if (query.isPending) {
@@ -227,7 +244,18 @@ function ClusterTableInner({ batchId }: { batchId: string }) {
     return <EmptyState title="Unavailable" detail={query.data.message || "Cluster summary is not available for this batch."} />;
   }
   const items = query.data?.items ?? [];
-  if (!items.length) return <EmptyState title="No clusters" detail="No cluster profiles for this batch." />;
+  if (!items.length) {
+    return (
+      <EmptyState
+        title="No clusters"
+        detail={
+          isCumulativeView(view)
+            ? "No cluster profiles across processed batches."
+            : "No cluster profiles for this batch."
+        }
+      />
+    );
+  }
 
   const records = items.reduce((sum, row) => sum + row.records, 0);
   const high = items.reduce((sum, row) => sum + row.high_risk, 0);
@@ -369,10 +397,10 @@ function ClusterTableInner({ batchId }: { batchId: string }) {
   );
 }
 
-export function DistrictCharts() {
+export function DistrictCharts({ view = DATA_VIEW_CURRENT }: { view?: DataView }) {
   return (
     <BatchSelectionGate emptyDetail="Ingest data before reviewing districts.">
-      {(batchId) => <DistrictChartsInner batchId={batchId} />}
+      {(batchId) => <DistrictChartsInner batchId={batchId} view={view} />}
     </BatchSelectionGate>
   );
 }
@@ -392,10 +420,10 @@ function formatLeader(result: { ids: string[]; value: number } | null, format: (
   return `${names} (${format(result.value)})`;
 }
 
-function DistrictChartsInner({ batchId }: { batchId: string }) {
+function DistrictChartsInner({ batchId, view }: { batchId: string; view: DataView }) {
   const query = useQuery({
-    queryKey: ["districts", batchId],
-    queryFn: () => getDistricts(batchId),
+    queryKey: listQueryKey("districts", view, batchId),
+    queryFn: () => getDistricts(batchId, view),
     retry: false,
   });
   if (query.isPending) {
@@ -420,7 +448,18 @@ function DistrictChartsInner({ batchId }: { batchId: string }) {
     return <EmptyState title="Unavailable" detail={query.data.message || "District summary is not available for this batch."} />;
   }
   const items = query.data?.items ?? [];
-  if (!items.length) return <EmptyState title="No districts" detail="No district profiles for this batch." />;
+  if (!items.length) {
+    return (
+      <EmptyState
+        title="No districts"
+        detail={
+          isCumulativeView(view)
+            ? "No district profiles across processed batches."
+            : "No district profiles for this batch."
+        }
+      />
+    );
+  }
 
   const records = items.reduce((sum, row) => sum + row.records, 0);
   const high = items.reduce((sum, row) => sum + row.high_risk, 0);

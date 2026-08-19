@@ -19,6 +19,14 @@ from app.modules.dashboard.schemas import (
     PipelineResponse,
     RecordDetailResponse,
 )
+from app.modules.dashboard.scope import (
+    CUMULATIVE_LABEL,
+    NO_CUMULATIVE_MESSAGE,
+    VIEW_CUMULATIVE,
+    fused_batch_count,
+    is_cumulative,
+    normalize_view,
+)
 from app.modules.dashboard.service import (
     esigma_status,
     get_batch,
@@ -102,10 +110,14 @@ def read_anomalies(
 
 
 @router.get("/anomalies/summary")
-def read_dashboard_anomaly_summary(batch_id: str | None = None, db: Session = Depends(get_db)):
+def read_dashboard_anomaly_summary(
+    batch_id: str | None = None,
+    view: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
     from app.modules.validation.intelligence.analytics import anomaly_summary
 
-    return anomaly_summary(db, batch_id)
+    return anomaly_summary(db, batch_id, view)
 
 
 @router.get("/records/{batch_id}/{record_id}", response_model=RecordDetailResponse)
@@ -119,13 +131,41 @@ def read_record(
     return RecordDetailResponse(**payload)
 
 
-@router.get("/enumerators", response_model=GroupListResponse)
-def read_enumerators(batch_id: str | None = None, db: Session = Depends(get_db)) -> GroupListResponse:
+def _group_list_response(db: Session, batch_id: str | None, grain: str, view: str | None) -> GroupListResponse:
+    selected = normalize_view(view)
+    if is_cumulative(selected):
+        count = fused_batch_count(db)
+        if count == 0:
+            return GroupListResponse(
+                available=False,
+                grain=grain,
+                view=selected,
+                message=NO_CUMULATIVE_MESSAGE,
+            )
+        items = group_rows(db, None, grain, view=selected)
+        return GroupListResponse(
+            available=True,
+            batch_id=None,
+            grain=grain,
+            items=items,
+            view=selected,
+            batch_count=count,
+            message=CUMULATIVE_LABEL,
+        )
     batch = get_batch(db, batch_id)
     if batch is None:
-        return GroupListResponse(available=False, grain="enumerator", message="No batches available.")
-    items = group_rows(db, batch.batch_id, "enumerator")
-    return GroupListResponse(available=True, batch_id=batch.batch_id, grain="enumerator", items=items)
+        return GroupListResponse(available=False, grain=grain, message="No batches available.")
+    items = group_rows(db, batch.batch_id, grain, view=selected)
+    return GroupListResponse(available=True, batch_id=batch.batch_id, grain=grain, items=items, view=selected)
+
+
+@router.get("/enumerators", response_model=GroupListResponse)
+def read_enumerators(
+    batch_id: str | None = None,
+    view: str | None = Query(None),
+    db: Session = Depends(get_db),
+) -> GroupListResponse:
+    return _group_list_response(db, batch_id, "enumerator", view)
 
 
 @router.get("/enumerators/{enumerator_id}", response_model=GroupDetailResponse)
@@ -137,37 +177,50 @@ def read_enumerator(enumerator_id: str, batch_id: str | None = None, db: Session
 
 
 @router.get("/clusters", response_model=GroupListResponse)
-def read_clusters(batch_id: str | None = None, db: Session = Depends(get_db)) -> GroupListResponse:
-    batch = get_batch(db, batch_id)
-    if batch is None:
-        return GroupListResponse(available=False, grain="cluster", message="No batches available.")
-    items = group_rows(db, batch.batch_id, "cluster")
-    return GroupListResponse(available=True, batch_id=batch.batch_id, grain="cluster", items=items)
+def read_clusters(
+    batch_id: str | None = None,
+    view: str | None = Query(None),
+    db: Session = Depends(get_db),
+) -> GroupListResponse:
+    return _group_list_response(db, batch_id, "cluster", view)
 
 
 @router.get("/districts", response_model=GroupListResponse)
-def read_districts(batch_id: str | None = None, db: Session = Depends(get_db)) -> GroupListResponse:
-    batch = get_batch(db, batch_id)
-    if batch is None:
-        return GroupListResponse(available=False, grain="district", message="No batches available.")
-    items = group_rows(db, batch.batch_id, "district")
-    return GroupListResponse(available=True, batch_id=batch.batch_id, grain="district", items=items)
+def read_districts(
+    batch_id: str | None = None,
+    view: str | None = Query(None),
+    db: Session = Depends(get_db),
+) -> GroupListResponse:
+    return _group_list_response(db, batch_id, "district", view)
 
 
 @router.get("/reports/{kind}")
 def download_report(
     kind: str,
     batch_id: str | None = None,
+    view: str | None = Query(None),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> StreamingResponse:
     allowed = {"high-risk", "anomalies", "enumerators", "districts", "batch", "investigations"}
     if kind not in allowed:
         raise HTTPException(status_code=404, detail="report not found")
-    batch = get_batch(db, batch_id)
-    if batch is None:
-        raise HTTPException(status_code=404, detail="batch not found")
-    header, rows, meta = report_rows(db, batch.batch_id, kind, allowed_districts=district_scope(user))
+    selected = normalize_view(view)
+    if is_cumulative(selected):
+        if fused_batch_count(db) == 0:
+            raise HTTPException(status_code=404, detail=NO_CUMULATIVE_MESSAGE)
+        header, rows, meta = report_rows(
+            db, None, kind, allowed_districts=district_scope(user), view=selected
+        )
+        filename = f"{kind}-cumulative.csv"
+    else:
+        batch = get_batch(db, batch_id)
+        if batch is None:
+            raise HTTPException(status_code=404, detail="batch not found")
+        header, rows, meta = report_rows(
+            db, batch.batch_id, kind, allowed_districts=district_scope(user), view=selected
+        )
+        filename = f"{kind}-{batch.batch_id}.csv"
     buffer = io.StringIO()
     for key, value in meta.items():
         buffer.write(f"# {key}={value}\n")
@@ -175,7 +228,6 @@ def download_report(
     writer.writerow(header)
     writer.writerows(rows)
     payload = buffer.getvalue()
-    filename = f"{kind}-{batch.batch_id}.csv"
     return StreamingResponse(
         iter([payload]),
         media_type="text/csv",

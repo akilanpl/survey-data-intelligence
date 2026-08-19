@@ -115,8 +115,12 @@ def update_detector(
 
 
 @router.get("/anomalies/summary", response_model=AnomalySummaryOut)
-def read_anomaly_summary(batch_id: str | None = None, db: Session = Depends(get_db)) -> AnomalySummaryOut:
-    return anomaly_summary(db, batch_id)
+def read_anomaly_summary(
+    batch_id: str | None = None,
+    view: str | None = Query(None),
+    db: Session = Depends(get_db),
+) -> AnomalySummaryOut:
+    return anomaly_summary(db, batch_id, view)
 
 
 @router.get("/anomalies")
@@ -152,8 +156,12 @@ def list_quality_anomalies(
 
 
 @router.get("/analytics/temporal")
-def analytics_temporal(batch_id: str | None = None, db: Session = Depends(get_db)) -> dict:
-    return temporal_series(db, batch_id)
+def analytics_temporal(
+    batch_id: str | None = None,
+    view: str | None = Query(None),
+    db: Session = Depends(get_db),
+) -> dict:
+    return temporal_series(db, batch_id, view)
 
 
 @router.get("/analytics/enumerators/{enumerator_id}")
@@ -172,8 +180,12 @@ def analytics_district(district_id: str, batch_id: str | None = None, db: Sessio
 
 
 @router.get("/analytics/detectors")
-def analytics_detectors(batch_id: str | None = None, db: Session = Depends(get_db)) -> dict:
-    return detector_analytics(db, batch_id)
+def analytics_detectors(
+    batch_id: str | None = None,
+    view: str | None = Query(None),
+    db: Session = Depends(get_db),
+) -> dict:
+    return detector_analytics(db, batch_id, view)
 
 
 @router.get("/analytics/distributions")
@@ -186,6 +198,7 @@ def analytics_explorer(
     batch_id: str | None = None,
     variable: str = "employment_rate",
     level: str = "district",
+    view: str | None = Query(None),
     db: Session = Depends(get_db),
 ) -> dict:
-    return explorer(db, batch_id, variable, level)
+    return explorer(db, batch_id, variable, level, view)

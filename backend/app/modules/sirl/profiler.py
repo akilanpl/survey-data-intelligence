@@ -38,11 +38,19 @@ class ProfileBundle:
     profiled_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
+def _normalize_col_key(name: str) -> str:
+    return "".join(ch for ch in name.lower() if ch.isalnum())
+
+
 def _first_present(columns: list[str], candidates: tuple[str, ...]) -> str | None:
     lookup = {name.lower(): name for name in columns}
+    normalized = {_normalize_col_key(name): name for name in columns}
     for candidate in candidates:
         if candidate in lookup:
             return lookup[candidate]
+        key = _normalize_col_key(candidate)
+        if key in normalized:
+            return normalized[key]
     return None
 
 

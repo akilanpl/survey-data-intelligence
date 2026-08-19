@@ -1,8 +1,13 @@
 "use client";
 
 import { DistrictCharts } from "@/components/group-tables";
+import { ViewScopeBanner, ViewScopeSelect } from "@/components/view-scope-select";
+import { useBatchSelection } from "@/components/shell";
+import { useDataView } from "@/lib/data-view";
 
 export default function DistrictsPage() {
+  const [view, setView] = useDataView();
+  const { batchId } = useBatchSelection();
   return (
     <div className="space-y-6">
       <div>
@@ -11,8 +16,12 @@ export default function DistrictsPage() {
         <p className="mt-2 max-w-3xl text-sm leading-6 text-inst-text-secondary">
           Compare survey coverage, quality signals, and risk across districts.
         </p>
+        <div className="mt-4">
+          <ViewScopeSelect view={view} onChange={setView} />
+        </div>
+        <ViewScopeBanner view={view} batchId={batchId} />
       </div>
-      <DistrictCharts />
+      <DistrictCharts view={view} />
     </div>
   );
 }
