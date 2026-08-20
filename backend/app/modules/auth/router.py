@@ -78,6 +78,22 @@ def _user_out(user: User) -> AuthUserOut:
 def read_auth_status() -> AuthStatusResponse:
     return AuthStatusResponse(**auth_status_payload())
 
+# @router.post("/login", response_model=LoginResponse)
+# def login(body: LoginRequest, response: Response, db: Session = Depends(get_db)) -> LoginResponse:
+#     user = db.scalars(select(User).where(User.username == body.username.strip())).first()
+#     if user is None or not user.is_active or not verify_password(body.password, user.password_hash):
+#         raise HTTPException(status_code=401, detail="Invalid credentials")
+#     token = create_access_token(user_id=user.id, username=user.username, role=user.role)
+#     _set_session_cookie(response, token)
+#     status = auth_status_payload()
+#     return LoginResponse(
+#         success=True,
+#         demo=status["demo"],
+#         notice=status["notice"],
+#         username=user.username,
+#         role=user.role,
+#     )
+
 
 @router.post("/login", response_model=LoginResponse)
 def login(
