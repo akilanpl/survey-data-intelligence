@@ -53,27 +53,27 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# app.add_middleware(
-#     CORSMiddleware,
-#     allow_origin_regex=(
-#     r"^https?://(localhost|127\.0\.0\.1|192\.168\.0\.100)(:\d+)?$"
-#     r"|^https://survey-data-intelligence\.vercel\.app$"
-# ),
-#     allow_credentials=True,
-#     allow_methods=["*"],
-#     allow_headers=["*"],
-# )
-
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=(
-        r"^https?://(localhost|127\.0\.0\.1|192\.168\.0\.100)(:\d+)?$"
-        r"|^https://survey-data-intelligence(-[a-z0-9]+)?\.vercel\.app$"
-    ),
+    r"^https?://(localhost|127\.0\.0\.1|192\.168\.0\.100)(:\d+)?$"
+    r"|^https://survey-data-intelligence\.vercel\.app$"
+),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origin_regex=(
+#         r"^https?://(localhost|127\.0\.0\.1|192\.168\.0\.100)(:\d+)?$"
+#         r"|^https://survey-data-intelligence(-[a-z0-9]+)?\.vercel\.app$"
+#     ),
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
 
 protected = [Depends(get_current_user)]
 
