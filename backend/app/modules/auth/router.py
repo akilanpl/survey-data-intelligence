@@ -78,101 +78,14 @@ def _user_out(user: User) -> AuthUserOut:
 def read_auth_status() -> AuthStatusResponse:
     return AuthStatusResponse(**auth_status_payload())
 
-# @router.post("/login", response_model=LoginResponse)
-# def login(body: LoginRequest, response: Response, db: Session = Depends(get_db)) -> LoginResponse:
-#     user = db.scalars(select(User).where(User.username == body.username.strip())).first()
-#     if user is None or not user.is_active or not verify_password(body.password, user.password_hash):
-#         raise HTTPException(status_code=401, detail="Invalid credentials")
-#     token = create_access_token(user_id=user.id, username=user.username, role=user.role)
-#     _set_session_cookie(response, token)
-#     status = auth_status_payload()
-#     return LoginResponse(
-#         success=True,
-#         demo=status["demo"],
-#         notice=status["notice"],
-#         username=user.username,
-#         role=user.role,
-#     )
-
-
 @router.post("/login", response_model=LoginResponse)
-def login(
-    body: LoginRequest,
-    response: Response,
-    db: Session = Depends(get_db),
-) -> LoginResponse:
-
-    username = body.username.strip()
-
-    # ---------------------------------------------------------
-    # HARD-CODED ADMIN LOGIN FOR DEMO
-    # ---------------------------------------------------------
-    if username == "admin" and body.password == "admin":
-
-        # Try to find the admin user in the database.
-        user = db.scalars(
-            select(User).where(User.username == "admin")
-        ).first()
-
-        # If admin exists, use the existing database user.
-        if user is not None and user.is_active:
-
-            token = create_access_token(
-                user_id=user.id,
-                username=user.username,
-                role=user.role,
-            )
-
-            _set_session_cookie(
-                response,
-                token,
-            )
-
-            status = auth_status_payload()
-
-            return LoginResponse(
-                success=True,
-                demo=status["demo"],
-                notice=status["notice"],
-                username=user.username,
-                role=user.role,
-            )
-
-    # ---------------------------------------------------------
-    # NORMAL DATABASE LOGIN
-    # ---------------------------------------------------------
-    user = db.scalars(
-        select(User).where(
-            User.username == username
-        )
-    ).first()
-
-    if (
-        user is None
-        or not user.is_active
-        or not verify_password(
-            body.password,
-            user.password_hash,
-        )
-    ):
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid credentials",
-        )
-
-    token = create_access_token(
-        user_id=user.id,
-        username=user.username,
-        role=user.role,
-    )
-
-    _set_session_cookie(
-        response,
-        token,
-    )
-
+def login(body: LoginRequest, response: Response, db: Session = Depends(get_db)) -> LoginResponse:
+    user = db.scalars(select(User).where(User.username == body.username.strip())).first()
+    if user is None or not user.is_active or not verify_password(body.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    token = create_access_token(user_id=user.id, username=user.username, role=user.role)
+    _set_session_cookie(response, token)
     status = auth_status_payload()
-
     return LoginResponse(
         success=True,
         demo=status["demo"],
@@ -180,6 +93,8 @@ def login(
         username=user.username,
         role=user.role,
     )
+
+
 
 @router.post("/demo/login", response_model=LoginResponse)
 def demo_login(body: LoginRequest, response: Response, db: Session = Depends(get_db)) -> LoginResponse:
