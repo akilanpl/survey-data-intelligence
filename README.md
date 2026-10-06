@@ -331,7 +331,7 @@ Leave `AI_*` and `ESIGMA_*` empty to run fully deterministic.
 
 ```bash
 cd backend
-python3 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --host 127.0.0.1 --port 8000
@@ -348,7 +348,7 @@ cd backend
 
 ```bash
 cd frontend
-npm install
+npm ci
 npm run build
 npm run start -- --port 3000
 ```
@@ -356,6 +356,48 @@ npm run start -- --port 3000
 Open `http://localhost:3000`, sign in, ingest a sample CSV from
 `data/samples/`, then **run validation** on the batch page — ingestion does
 not auto-run the full pipeline.
+
+---
+
+## Hosted deployment (Vercel + FastAPI Cloud)
+
+This repository is a monorepo. Set Vercel's **Root Directory** to
+`frontend`, and FastAPI Cloud's **Application Directory** to `backend`.
+The backend requires Python 3.12; its `pyproject.toml` declares
+`app.main:app` as the entrypoint. Keep the repository's `data/samples/`
+fixtures available for mock eSIGMA ingestion.
+
+On the backend, configure `JWT_SECRET`, changed `AUTH_ADMIN_PASSWORD` and
+`AUTH_SUPERVISOR_PASSWORD`, and `AUTH_COOKIE_SECURE=true`. Mount a persistent
+writable disk and set `DATA_DIR` to its absolute path. If `DATABASE_URL` is
+omitted, SQLite lives at `DATA_DIR/app.db`; if you set it explicitly, put
+that file on the persistent disk too. Parquet files are stored in
+`DATA_DIR/processed/`. Use one application instance with one worker: the
+pipeline queue is in-process and restart recovery assumes a single owner.
+A database alone does not persist Parquet; a host without persistent file
+storage cannot preserve this application's data across redeploys.
+
+On Vercel, set `BACKEND_URL` to the deployed backend's **HTTPS origin**
+(e.g. `https://your-backend.example.com`, without `/api`). Set it for each
+environment you deploy, including Preview. Leave `NEXT_PUBLIC_API_BASE_URL`
+empty so login and all API requests use the frontend's `/api` proxy.
+This keeps the HTTP-only session cookie on the frontend origin; pointing
+the browser directly at a different site will conflict with the backend's
+`SameSite=lax` cookie. Redeploy after changing frontend environment variables:
+Next.js resolves rewrites and public variables at build time. A Vercel build
+now fails clearly if the backend origin is missing, local, or malformed.
+
+For local frontend overrides, use `frontend/.env.local`; Next.js does not
+load the repository-root `.env`. The backend loads root `.env` and then
+`backend/.env`, with process environment variables taking precedence.
+
+Verify deployment by checking `/api/health` on both the backend and frontend,
+then sign in and check `/api/auth/me`, upload a sample, and run validation.
+Restart the backend and confirm the batch and its Parquet file remain.
+If Vercel reports a blocked deployment, inspect its dashboard reason; the
+lockfile must stay on a patched Next.js release, but account or deployment
+protection restrictions need to be resolved in the hosting dashboard.
+FastAPI Cloud startup/build errors are in the deployment's dashboard logs.
 
 ---
 

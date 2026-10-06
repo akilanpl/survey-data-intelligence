@@ -1,4 +1,5 @@
 from collections.abc import Generator
+from pathlib import Path
 
 from sqlalchemy import create_engine
 from sqlalchemy import inspect, text
@@ -27,6 +28,9 @@ def init_db() -> None:
 
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     (settings.data_dir / "processed").mkdir(parents=True, exist_ok=True)
+    # DATABASE_URL may point to a different disk/directory than DATA_DIR.
+    if engine.url.get_backend_name() == "sqlite" and engine.url.database not in (None, "", ":memory:"):
+        Path(engine.url.database).parent.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(bind=engine)
     inspector = inspect(engine)
     if "batches" in inspector.get_table_names():
