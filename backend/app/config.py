@@ -2,6 +2,7 @@ from pathlib import Path
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import make_url
 
 # backend/app/config.py → backend/ → repository root
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -95,13 +96,15 @@ class Settings(BaseSettings):
         if not self.data_dir.is_absolute():
             self.data_dir = (PROJECT_ROOT / self.data_dir).resolve()
 
-        sqlite_prefix = "sqlite:///"
-        if self.database_url.startswith(sqlite_prefix):
-            raw_path = self.database_url[len(sqlite_prefix) :]
-            db_path = Path(raw_path)
+        # A persistent DATA_DIR must also hold the default SQLite database.
+        if "database_url" not in self.model_fields_set:
+            self.database_url = f"sqlite:///{self.data_dir / 'app.db'}"
+        url = make_url(self.database_url)
+        if url.get_backend_name() == "sqlite" and url.database not in (None, "", ":memory:"):
+            db_path = Path(url.database)
             if not db_path.is_absolute():
                 db_path = (PROJECT_ROOT / db_path).resolve()
-            self.database_url = f"sqlite:///{db_path}"
+            self.database_url = url.set(database=str(db_path)).render_as_string(hide_password=False)
         return self
 
 
