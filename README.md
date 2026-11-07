@@ -1,421 +1,230 @@
-<div align="center">
+# Survey Data Intelligence
 
-# SIRL
-### Survey Intelligence, Without the Guesswork.
+**SIRL · Explainable survey-quality analysis with rules, statistics and Isolation Forest.**
 
-**An explainable, evidence-fused anomaly platform for large-scale field surveys.**
-**Deterministic by design. AI as a guest, never as the judge.**
+Survey Data Intelligence turns CSV or eSIGMA-format submissions into a persisted data-quality investigation workflow. A Python pipeline normalizes records, stores Parquet batches, builds structured profiles, combines three validation channels, and exposes record-level evidence through a Next.js dashboard. Optional AI explains selected evidence after scoring; it does not assign risk or decide whether a record violates a validity rule.
 
-[![Status](https://img.shields.io/badge/status-hackathon_build_%E2%80%94_phase_11-blue)]()
-[![Data](https://img.shields.io/badge/data-synthetic%2Fdemo-orange)]()
-[![Stack](https://img.shields.io/badge/stack-FastAPI%20%7C%20Next.js%20%7C%20SQLite-black)]()
-[![AI Role](https://img.shields.io/badge/AI-enrichment_only-8A2BE2)]()
+The bundled PLFS-oriented examples and ground-truth evaluation are **synthetic/demo data**. The implementation is designed for inspecting survey quality and unusual response patterns; an anomaly signal is a reason to investigate, not proof of fabrication.
 
-*Sample extracts are synthetic/demo data, not live government survey microdata.*
+[Data flow](#data-lineage-and-processing) · [ML methodology](#isolation-forest-methodology) · [Scoring](#evidence-fusion-and-classification) · [Evaluation](#synthetic-ground-truth-evaluation) · [Run locally](#run-locally)
 
-</div>
-
----
-
-## One more thing about AI-powered data validation.
-
-Every "AI-powered" anomaly detector today makes the same pitch: point a
-language model at your data, let it decide what looks wrong. It sounds
-impressive in a demo. It's a liability in a survey with 100,000 households
-and a supervisor whose job depends on the answer being defensible.
-
-**A risk score isn't a vibe. It's a number someone has to stand behind.**
-
-So this platform draws a hard line: rules, statistics, and machine learning
-decide what's anomalous. AI is only ever allowed to *explain* — in plain
-language, with stated confidence, never touching the score itself.
-
----
-
-## The idea, in one sentence
-
-> **Raw CSV/eSIGMA survey submissions become an explainable, evidence-fused, investigable anomaly dashboard — deterministic rules/statistics/ML as the source of truth, AI as an optional, privacy-conscious explanation layer.**
-
-Built survey-agnostic. Shipped first against PLFS — India's Periodic Labour
-Force Survey — because that's a real-world scale problem: thousands of
-enumerators, clusters, and districts, and no way to review it all by hand.
-
----
-
-## The Problem
-
-Field surveys at scale produce data with every failure mode you can imagine:
-
-- Impossible values — age > 100, working hours > 168/week, negative income
-- Enumerator bias, or outright fabrication
-- Referential breaks — records pointing to clusters, districts, or
-  enumerators that don't exist
-- Missing identifiers
-- Statistical drift against historical survey rounds
-
-**Manual review doesn't scale.** This platform automates the whole loop:
-ingestion → profiling → multi-signal validation → risk scoring →
-explainable, investigable dashboard.
-
----
-
-## How It Actually Works
+## Data lineage and processing
 
 ```mermaid
 flowchart TD
-    A[CSV Upload] --> C[Standardizer]
-    B[eSIGMA JSON] --> C
-    C --> D["Parquet — data/processed/{batch_id}.parquet"]
-    D --> E["SIRL — Survey Intelligence Retrieval Layer"]
-    E --> F["Unified Validation Engine — Rules + Statistics + ML"]
-    F --> G[Evidence Fusion → risk_score 0–100]
-    G --> H["LLM Explanation — optional, evidence-only"]
-    H --> I[Supervisor Dashboard]
+    CSV[CSV upload] --> Normalize[Canonical standardizer]
+    ES[eSIGMA JSON adapter] --> Normalize
+    Normalize --> PQ[(Batch Parquet file)]
+    Normalize --> Meta[(SQLAlchemy batch metadata)]
+    PQ --> Profile[SIRL structured profiles]
+    Profile --> Rules[Rule validation]
+    Profile --> Stats[Statistical analysis]
+    Profile --> ML[Isolation Forest]
+    Rules --> Fusion[Evidence fusion and classification]
+    Stats --> Fusion
+    ML --> Fusion
+    Fusion --> Store[(Persisted evidence and assessments)]
+    Store --> Dashboard[Dashboard and investigations]
+    Store --> Explain[Optional evidence-only explanation]
+    Explain --> Dashboard
 ```
 
-Nothing about that arrow from Fusion to Explanation runs backward. The score
-is final before AI ever sees a summary of it.
+The [standardizer](backend/app/modules/ingestion/standardizer.py) applies canonical aliases, normalizes names and whitespace, disambiguates duplicate columns, orders columns and applies a common missing-value policy. Numeric-compatible columns use pandas nullable integer or floating types; mixed nonnumeric columns remain strings. The response retains schema version, columns and dtypes so ingestion decisions are inspectable.
 
-### The architecture lock
+The [Parquet store](backend/app/modules/storage/parquet.py) writes one processed dataset per batch. SQLAlchemy stores batch identity, input hashes, stage state, profiles, evidence and investigation records. SQLite is the default database; the durable analytical dataset lives separately in Parquet. Backups must include both.
 
-These aren't suggestions, they're constraints baked into the build:
+The [ingestion routes](backend/app/modules/ingestion/router.py) queue the pipeline by default (`auto_pipeline=true`). `auto_pipeline=false` supports ingestion without immediate validation. Content hashes can reuse completed ingestion/pipeline results when enabled. The [orchestrator](backend/app/modules/pipeline/orchestrator.py) records stage progress and outcomes; worker dispatch and startup recovery are implemented in the pipeline module. This is an in-process worker design with a default single concurrent pipeline, not a distributed queue.
 
-- CSV and eSIGMA are the *only* two inputs; both converge into one
-  normalized schema.
-- AI is enrichment/explanation only — **never** the source of truth.
-  Scoring stays in Python. AI cannot change `risk_score`, `severity`, or
-  `agreement`.
-- The complete Parquet dataset is never sent to an LLM — only structured
-  summaries for top-flagged records.
-- AI access goes through a vendor-neutral abstraction layer, config'd via
-  env vars.
-- **The deterministic pipeline works end-to-end even if the AI API is
-  completely unavailable.**
-- No Redis, Kafka, Celery, Kubernetes, PostgreSQL, vector databases,
-  LangChain, or LlamaIndex. Hackathon-scale: SQLite + Parquet, full stop.
-- Live eSIGMA is only ever treated as real if `ESIGMA_BASE_URL` is
-  configured *and* a probe succeeds.
+The eSIGMA adapter supports a bundled mock path and a configured HTTP source. Real external connectivity requires the appropriate endpoint, credentials and successful health/probe behavior; fixture ingestion does not establish a government-system integration.
 
----
+## Profiling and validation
 
-## What "SIRL" Actually Means
+SIRL means **Survey Intelligence Retrieval Layer**. It builds reusable dataset, variable, record, enumerator, cluster, district and historical context from completed batches. Its [profiler](backend/app/modules/sirl/profiler.py) uses pandas/NumPy summaries and hierarchy grouping. It is structured analytical context rather than document embeddings or vector retrieval.
 
-**Survey Intelligence Retrieval Layer** — RAG-*inspired*, but not RAG. No
-text embeddings. No vector search. No documents.
+Three downstream channels produce separately stored evidence:
 
-SIRL reads a completed Parquet batch and runs deterministic profiling with
-Pandas/NumPy — vectorized, no external calls — to build seven structured
-profile types:
+| Channel | Implementation | Meaning of its output |
+| --- | --- | --- |
+| Rules | Allowlisted predicates, optional conditions, cross-field comparisons and reference lookups in the [rule evaluator](backend/app/modules/validation/rules/evaluator.py). | A specific declared constraint was violated, or the rule was skipped with a reason such as a missing field. |
+| Statistics | Dataset z-scores, Tukey IQR, enumerator/cluster/district group z-scores and prior-batch mean comparisons in the [statistics engine](backend/app/modules/validation/statistics/engine.py). | A value or aggregate is unusual under the available reference and configured thresholds. |
+| ML | Numeric feature selection, reference-population fitting, median imputation and Isolation Forest in the [ML engine](backend/app/modules/validation/ml/engine.py). | Relative isolation under the fitted model; numerical score and model provenance accompany flagged records. |
 
-```
-dataset · variable · record · enumerator · cluster · district · historical
-```
+Rule evaluation dispatches to defined operators rather than executing arbitrary expressions. Null-handling, conditional rules and missing-column skips are explicit. Statistical detectors use observation-count and variance guards; historical comparison uses prior batches rather than treating the current batch as its own history.
 
-It can optionally enrich variable/dataset profiles with AI-generated
-context — summaries only, never raw data — then persists everything to
-SQLite as structured, reusable blobs.
+Additional intelligence modules support relationship, enumerator, geographic, historical, temporal and pattern investigations. Their evidence and hierarchy context should be read with the underlying rule/statistical/ML records rather than interpreted as extra independent probabilities.
 
-**SIRL understands context. It does not decide anomalies, assign risk, run
-ML, or generate explanations.** Those are separate, downstream phases —
-because a context layer that also judges is a context layer you can't trust.
+## Isolation Forest methodology
 
----
+The model selects numeric survey measures while excluding identifiers and categoricals. Where structured variable profiles are available, they constrain the usable numeric feature set.
 
-## The Pipeline
+1. Load eligible historical batches and combine their reference columns.
+2. Use the historical reference when it contains enough training records; otherwise fit on the current batch if it is large enough.
+3. Learn medians from the selected training/reference population and apply those same medians to current records. Columns without a usable training median are excluded.
+4. Fit Isolation Forest, then retain raw scores, normalized scores, prediction labels, feature names, training source and model configuration.
 
-| Stage | What Happens |
-|---|---|
-| **1. Ingest → Parquet** | CSV and eSIGMA both funnel into one canonical schema — identical columns, dtypes, and missing-value policy either way. `batch_id` format: `{SURVEY}_{YYYY}_{MM}_{DD}_{NNN}`. |
-| **2. SIRL Profiling** | Reads Parquet only. Vectorized groupby/transform/agg — no row-by-row loops. Historical profiles never fabricate history: no prior batch means `historical_context_available = false`, not a guess. |
-| **3. Unified Validation** | Three independent channels: **Rules** (safe DSL, no `eval`/`exec`, scoped by `survey_code`), **Statistics** (z-score, IQR, PSI/KS drift, enumerator/cluster deviation), **ML** (Isolation Forest, normalized to [0,1]). |
-| **4. Evidence Fusion** | Weighted combination → `risk_score` (0–100) → severity/priority tiers. |
-| **5. Anomaly Classification** | A dedicated authority decides `CONFIRMED` vs. `REVIEW` vs. `NORMAL` — because a risk score alone is not a verdict. |
-| **6. LLM Explanation** | Evidence JSON in, plain-language explanation out — with a deterministic fallback template if AI is down. |
-| **7. Supervisor Dashboard** | KPIs, anomaly queue, record drill-down, hierarchy analytics, investigation, export. |
+Current defaults in [configuration](backend/app/config.py) are **100 trees**, `contamination="auto"`, `random_state=42`, a minimum of **32 training rows**, and at least **two usable features**. Insufficient data/features produce explicit stage results rather than an invented model score. Current-batch fitting measures relative isolation in that batch; it is not held-out validation.
 
-### Evidence Fusion weights
+The [model implementation](backend/app/modules/validation/ml/model.py) transforms sklearn scores as follows:
 
-| Channel | Weight |
-|---|---|
-| Rules | 0.25 |
-| Statistics | 0.25 |
-| ML | 0.20 |
-| Historical | 0.20 |
-| AI context | 0.10 *(0 if AI unavailable — weights renormalize)* |
-
-`risk_score = round(100 * weighted_sum)` · **HIGH** ≥ 75 · **MEDIUM** ≥ 50 ·
-**LOW** ≥ 25 · else unflagged.
-
-### The distinction that matters most: CONFIRMED vs. REVIEW
-
-It would be easy — and wrong — to treat "statistically unusual" as
-"fraudulent." This platform refuses that shortcut:
-
-- **CONFIRMED** — only when a hard validity rule actually fired (age,
-  hours, income, household, required-ID, or employment-hours bounds).
-  Reference-lookup misses don't count.
-- **REVIEW** — statistics and ML agree, or either alone looks unusual.
-  Flagged for a human. Never called "invalid."
-- **NORMAL** — nothing fired, or only a demo reference-list miss.
-
-Language matters here as much as math: `REVIEW` records are described as
-*"unusual, needs verification,"* never as errors.
-
----
-
-## Sample Output, End to End
-
-Record `M033`, batch `BATCH_2026_08_15_111911_csv_e12de2`:
-
-```
-risk_score:        98.91
-severity:          CRITICAL
-agreement:         strong
-anomaly_status:    CONFIRMED
-classification:    hard_rule_violation
-
-Rule fired:        working_hours = 190 exceeds WORKING_HOURS_MAX (168)
-Statistics:        dataset z = 4.59 · district z = 3.77 · cluster z = 3.46 · enumerator z = 2.45
-ML:                Isolation Forest anomaly score 95.64 (HIGH)
-AI explanation:    plain-language summary tying the rule violation, statistical
-                   outlier status, and ML flag together — with a stated
-                   recommended_action and explanation_confidence
+```text
+raw = -IsolationForest.score_samples(X)
+lo, hi = 1st and 99th percentiles of raw scores on training data
+anomaly_score = clip(100 * (raw - lo) / (hi - lo), 0, 100)
 ```
 
-Four independent signals, one transparent verdict, and the reasoning shown —
-not asserted.
+A degenerate training-score span maps to zeros. These are **training-percentile-scaled anomaly scores**, not empirical percentile ranks or probabilities that a response is wrong. sklearn prediction labels determine which records become ML detections; a displayed score of 91 does not mean 91% certainty. ML-only severity thresholds are 60 for MEDIUM and 80 for HIGH, separate from fused severity.
 
----
+## Evidence fusion and classification
 
-## The Dashboard
+The current method is `fusion-v1-prototype`. It combines **rules, statistics and ML only**. Historical/reference context informs upstream analysis and confidence metadata; it is not a fourth weighted channel. AI is not a scoring channel.
 
-| Route | Purpose |
-|---|---|
-| `/login` | Demo auth — `FIELD_SUPERVISOR` / `SURVEY_ADMIN` |
-| `/` | KPIs: processed, normal, flagged, high-risk, hierarchy summary |
-| `/dashboard/ingest` | CSV upload, eSIGMA trigger, batch list |
-| `/dashboard/anomalies` | Filterable, paginated anomaly queue |
-| `/dashboard/records/[recordId]` | Full evidence graph: record → rules/stats/ML → fusion → classification |
-| `/dashboard/analytics` | District/cluster/enumerator views (Recharts) |
-| `/rules` | Enable/disable validation rules |
-| `/export` | CSV / Excel — deliberately no PDF |
+```mermaid
+flowchart LR
+    R[Rule evidence] --> RS[Normalize and aggregate rule severity]
+    S[Statistical evidence] --> SS[Normalize and aggregate statistical severity]
+    M[ML evidence] --> MS[Aggregate normalized anomaly scores]
+    RS --> Risk[Available-source weighted risk]
+    SS --> Risk
+    MS --> Risk
+    Risk --> Severity[Severity and escalation]
+    R --> Verdict[Independent validity classification]
+    S --> Verdict
+    M --> Verdict
+    Severity --> Assessment[Assessment with evidence references]
+    Verdict --> Assessment
+    Assessment --> Explanation[Optional explanation and human review]
+```
 
-Investigation actions — `VERIFY`, `REQUEST_REENUMERATION`, `MARK_VALID` —
-move through `OPEN → INVESTIGATING → RESOLVED`, with a full audit trail on
-every status change.
+### Risk and evidence confidence
 
----
+| Source | Default weight |
+| --- | ---: |
+| Rules | 0.40 |
+| Statistics | 0.35 |
+| ML | 0.25 |
 
-## What Happens When AI Goes Down
+Weights are renormalized over **available engine runs**, not just sources that flagged a particular record:
 
-This is the differentiator that actually gets tested, not just claimed:
+```text
+risk = sum(source_score[s] * weight[s] / sum(available_weights))
+```
 
-| Stage | Behavior with AI unavailable |
-|---|---|
-| SIRL profiling | Full deterministic stats run normally; `ai_enriched = false` |
-| Validation | Rules + stats + Isolation Forest run normally; AI channel weight → 0, others renormalize |
-| Explanation | Deterministic template replaces LLM text |
-| Dashboard | Shows an "AI unavailable" badge — everything else keeps working |
-| Batch status | **Never** flips to a failure state purely because AI failed |
+A completed available source can contribute zero evidence for a record. Within each source, multiple detections aggregate as `min(100, strongest + 0.20 * sum(remaining))`. Rule severities map to 0/25/50/80/100; statistical severities map to 0/30/60/90/100. ML scores are already on the 0–100 scale. The [scorer](backend/app/modules/validation/fusion/scoring.py) clips values and rounds reported risk to two decimal places.
 
-If the AI vendor has an outage, supervisors don't lose the tool. They lose a
-sentence of prose, and get a template instead.
+| Fused risk | Severity before escalation |
+| --- | --- |
+| Below 25 | LOW |
+| 25 to below 50 | MEDIUM |
+| 50 to below 75 | HIGH |
+| 75 and above | CRITICAL |
 
----
+When at least two available sources have HIGH/CRITICAL source severity, escalation enforces a minimum HIGH risk/severity. Agreement and `evidence_confidence` are deterministic heuristics describing evidence availability and concordance. They are not calibrated probabilities or statistical confidence intervals. A LOW risk value alone does not mean a record was detected as anomalous.
 
-## Why This, and Not the Obvious Alternative
+### Validity classification
 
-- **Multi-signal fusion, not a black box.** Rules, statistics, and ML vote
-  independently — the UI shows *which sources agreed*, not just a number.
-- **AI is enrichment, never the source of truth.** The deterministic
-  pipeline works completely with AI switched off.
-- **Privacy and cost-conscious by construction.** The full dataset never
-  touches an LLM — only compact evidence summaries, for top-flagged records
-  only.
-- **Confirmed vs. Review, always.** Avoids the "everything unusual = fraud"
-  trap that makes AI validation tools legally and ethically risky at scale.
-- **Hierarchical, not just record-level.** Catches enumerator bias and
-  cluster/district drift — systemic field issues, not just one bad row.
-- **Survey-agnostic core.** A canonical schema plus a PLFS mapping table;
-  rules scoped by `survey_code` so a second survey onboards without
-  re-architecting anything.
-- **Graceful degradation, everywhere.** AI down, no historical baseline,
-  missing columns, unknown reference codes — every case has a tested
-  fallback, not a crash.
+The [classification authority](backend/app/modules/validation/fusion/classification.py) deliberately ignores overall risk and severity:
 
----
+- **CONFIRMED:** an allowlisted hard validity rule fired, such as age/hours bounds, nonnegative income, household size, required identifiers or employment/hours consistency.
+- **REVIEW:** statistical and/or ML evidence exists without a hard validity violation.
+- **NORMAL:** no such evidence exists; a demo reference-list miss alone does not establish invalidity.
 
-## The Stack
+This separation lets an unusual response remain a review signal even when its risk is high. Confirmation is about the implemented validity constraint, not a finding of fraud.
 
-<table>
-<tr><td valign="top">
+## Investigation and explanation
 
-**Backend**
-- FastAPI + Uvicorn
-- SQLAlchemy 2 + SQLite
-- Pandas / NumPy / SciPy
-- scikit-learn (Isolation Forest)
-- PyArrow (Parquet)
-- httpx, pydantic-settings
-- pytest (60+ tests)
+The dashboard connects ingestion progress, batch summaries, anomaly queues, record evidence, hierarchy analytics, rules and CSV/Excel export. Investigation actions include verification, re-enumeration requests and marking a record valid, with persisted status history and notes. See the [investigation service](backend/app/modules/investigations/service.py) and [data models](backend/app/models.py).
 
-</td><td valign="top">
+The optional provider abstraction receives bounded structured context for enrichment or explanation rather than the complete Parquet dataset. Explanation follows scoring and cannot overwrite `risk_score`, severity or agreement. Provider failure falls back to deterministic explanation behavior; the numerical pipeline remains independently usable. Provider health, structured-output validation and explanation regression tests are separate from model-quality evaluation.
 
-**Frontend**
-- Next.js (App Router) + TypeScript
-- Tailwind CSS
-- Recharts
-- TanStack Table + Query
-- lucide-react
+## Synthetic ground-truth evaluation
 
-</td><td valign="top">
+The [evaluation helper](backend/app/modules/evaluation/synthetic.py) sends a controlled **40-row CSV** through the application pipeline and compares emitted evidence to a separate ground-truth file. The regression expects **11 intentionally anomalous/unusual records and 29 clean records**, checks hard-rule detection, and keeps the labels outside validation engines.
 
-**AI**
-- Vendor-neutral abstraction
-  (`AI_BASE_URL`, `AI_API_KEY`,
-  `AI_MODEL`, `AI_TIMEOUT_SECONDS`)
-- Tested with `deepseek/deepseek-v4-flash`
-- Mock AI mode for deterministic testing
+Its report distinguishes rule metrics, confirmed-classification metrics, review signals, source-specific detections, explanation calls and whether clean records reached AI. Confirmation metrics use the declared hard-rule truth set; they are not a general fraud-detection benchmark. The [test](backend/tests/test_synthetic_evaluation.py) uses a fake explanation provider and asserts behavior on these fixtures, including rule recall and false-positive expectations. Those assertions are not field-survey performance measurements.
 
-</td></tr>
-</table>
+Run this focused regression from `backend` after installing dependencies:
 
-**Explicitly excluded, on purpose:** Redis, Kafka, Celery, Kubernetes,
-PostgreSQL, vector databases, LangChain, LlamaIndex, embeddings, external
-profiling libraries, PDF export.
+```sh
+.venv/bin/python -m pytest tests/test_synthetic_evaluation.py -q
+```
 
----
+The broader [backend suite](backend/tests) covers ingestion, storage, profiling, rules, statistics, ML, fusion, classification, explanations, orchestration, authentication and investigations. Current test results should be obtained against the exact source/environment being reviewed; no historical test count is presented as a current run.
 
-## The Honest Part
+## Run locally
 
-This is a hackathon build, frozen through Phase 11 — and that's stated up
-front rather than dressed up.
+Use **Python 3.12** as required by [the backend manifest](backend/pyproject.toml), plus Node.js/npm compatible with the locked Next.js frontend. The examples below use a POSIX shell.
 
-**What's real and tested:** the full ingestion → SIRL → validation → fusion
-→ classification → dashboard loop, 8 starter validation rules, the pipeline
-orchestrator with live progress tracking, investigation workflow with audit
-trail, and 60+ backend tests.
+From the repository root:
 
-**What's explicitly out of scope for this build:** real eSIGMA production
-auth/VPN integration, vector DB / document RAG, deep learning or AutoML,
-streaming infrastructure, PDF reports, multi-tenant SaaS or full production
-RBAC, sending full datasets to any LLM, and MLOps leaderboards.
+```sh
+cp .env.example .env
+```
 
-Sample extracts are synthetic. Do not claim live eSIGMA or live AI unless
-the relevant env vars are set and the health/probe checks actually succeed.
-
----
-
-## Get It Running
-
-### Environment
-
-Copy `.env.example` to `.env` at the repo root. `.env` is gitignored —
-secrets never belong in frontend code.
-
-Required for any shared/demo host:
-
-- `JWT_SECRET` — replace the placeholder
-- `AUTH_ADMIN_PASSWORD` / `AUTH_SUPERVISOR_PASSWORD` — change the defaults
-- `AUTH_COOKIE_SECURE=true` over HTTPS
-- A persistent disk for `data/app.db` and `data/processed/` — an ephemeral
-  filesystem loses every batch on restart
-
-Default logins are hackathon/demo only: `admin` / `admin` (`SURVEY_ADMIN`),
-`supervisor` / `supervisor` (`FIELD_SUPERVISOR`).
-
-Leave `AI_*` and `ESIGMA_*` empty to run fully deterministic.
-`ESIGMA_MOCK_MODE=true` uses the bundled fixture.
+Configure a unique `JWT_SECRET` and your own `AUTH_ADMIN_PASSWORD` / `AUTH_SUPERVISOR_PASSWORD` in the ignored file. Keep `AI_*` unset to exercise the deterministic pipeline and use `ESIGMA_MOCK_MODE=true` for the bundled mock adapter. The backend reads root `.env`, then `backend/.env`; process environment variables take precedence.
 
 ### Backend
 
-```bash
+```sh
 cd backend
 python3.12 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+. .venv/bin/activate
+python -m pip install -r requirements.txt
 uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Health check: `GET /api/health` → `{"status":"ok"}`
-
-```bash
-cd backend
-.venv/bin/pytest -q
-```
+The application initializes its default SQLite schema and starts pipeline recovery/worker logic on startup. Check `GET /api/health`; interactive API documentation is available at `http://127.0.0.1:8000/docs`.
 
 ### Frontend
 
-```bash
+In a separate terminal, from the repository root:
+
+```sh
 cd frontend
 npm ci
 npm run build
 npm run start -- --port 3000
 ```
 
-Open `http://localhost:3000`, sign in, ingest a sample CSV from
-`data/samples/`, then **run validation** on the batch page — ingestion does
-not auto-run the full pipeline.
+Open `http://localhost:3000`, sign in with the configured account, and upload a sample from `data/samples/`. Ingestion queues validation automatically by default; the batch page exposes progress and evidence. The frontend proxies `/api/*` to `http://127.0.0.1:8000` unless `BACKEND_URL` supplies another origin. Local frontend overrides belong in `frontend/.env.local`.
 
----
+### Checks
 
-## Hosted deployment (Vercel + FastAPI Cloud)
+Run backend and frontend checks from their respective directories:
 
-This repository is a monorepo. Set Vercel's **Root Directory** to
-`frontend`, and FastAPI Cloud's **Application Directory** to `backend`.
-The backend requires Python 3.12; its `pyproject.toml` declares
-`app.main:app` as the entrypoint. Keep the repository's `data/samples/`
-fixtures available for mock eSIGMA ingestion.
+```sh
+# backend/
+.venv/bin/python -m pytest -q
+```
 
-On the backend, configure `JWT_SECRET`, changed `AUTH_ADMIN_PASSWORD` and
-`AUTH_SUPERVISOR_PASSWORD`, and `AUTH_COOKIE_SECURE=true`. Mount a persistent
-writable disk and set `DATA_DIR` to its absolute path. If `DATABASE_URL` is
-omitted, SQLite lives at `DATA_DIR/app.db`; if you set it explicitly, put
-that file on the persistent disk too. Parquet files are stored in
-`DATA_DIR/processed/`. Use one application instance with one worker: the
-pipeline queue is in-process and restart recovery assumes a single owner.
-A database alone does not persist Parquet; a host without persistent file
-storage cannot preserve this application's data across redeploys.
+```sh
+# frontend/
+npm test
+npx tsc --noEmit
+npm run build
+```
 
-On Vercel, set `BACKEND_URL` to the deployed backend's **HTTPS origin**
-(e.g. `https://your-backend.example.com`, without `/api`). Set it for each
-environment you deploy, including Preview. Leave `NEXT_PUBLIC_API_BASE_URL`
-empty so login and all API requests use the frontend's `/api` proxy.
-This keeps the HTTP-only session cookie on the frontend origin; pointing
-the browser directly at a different site will conflict with the backend's
-`SameSite=lax` cookie. Redeploy after changing frontend environment variables:
-Next.js resolves rewrites and public variables at build time. A Vercel build
-now fails clearly if the backend origin is missing, local, or malformed.
+The backend test fixture creates a temporary SQLite database and uses controlled provider configuration. Integration tests still write processed fixture files, so use an isolated checkout and `DATA_DIR` when separating test artifacts from local demonstration data.
 
-For local frontend overrides, use `frontend/.env.local`; Next.js does not
-load the repository-root `.env`. The backend loads root `.env` and then
-`backend/.env`, with process environment variables taking precedence.
+## Access, storage and hosting
 
-Verify deployment by checking `/api/health` on both the backend and frontend,
-then sign in and check `/api/auth/me`, upload a sample, and run validation.
-Restart the backend and confirm the batch and its Parquet file remain.
-If Vercel reports a blocked deployment, inspect its dashboard reason; the
-lockfile must stay on a patched Next.js release, but account or deployment
-protection restrictions need to be resolved in the hosting dashboard.
-FastAPI Cloud startup/build errors are in the deployment's dashboard logs.
+[FastAPI router registration](backend/app/main.py) requires authenticated sessions for ingestion, batches, profiling, validation, pipeline, dashboard, intelligence and investigation routes. Sessions use an HTTP-only cookie with `SameSite=lax`; secure cookies require HTTPS. Dashboard/investigation role and scope handling is implemented in their own modules. This is a demo identity model rather than enterprise SSO or a claim of multi-tenant isolation.
 
----
+For a hosted monorepo setup, use `frontend` as the frontend root and `backend` as the API application directory. Set frontend `BACKEND_URL` to the API's HTTPS **origin**, without `/api`, credentials or a path. Leave `NEXT_PUBLIC_API_BASE_URL` empty to preserve same-origin cookie handling. The Next.js configuration rejects missing/local/non-HTTPS backend origins on Vercel builds.
 
-## Security Notes
+Set `DATA_DIR` to persistent writable storage, and keep the SQLite database there or configure `DATABASE_URL` explicitly. Persist `processed/` Parquet files as well as database rows. Use one application instance/worker for the in-process pipeline ownership model. Configure HTTPS, secure cookies, changed credentials and the external access boundary before sharing a host. Deployment configuration is an operating guide, not proof of an accepted deployment.
 
-- Secrets live in environment variables — never in the Next.js bundle.
-- Session cookie: `httpOnly`, `SameSite=lax`; set
-  `AUTH_COOKIE_SECURE=true` on HTTPS.
-- Placeholder JWT/demo passwords are not a production identity system.
-- Core validation APIs intentionally remain unauthenticated in this build —
-  login gates the UI only, by explicit hackathon-scope decision.
-- Do not claim live eSIGMA or live AI unless those env vars are set and
-  health/probe checks succeed.
+## Code map
 
-<div align="center">
+| Path | Responsibility |
+| --- | --- |
+| `backend/app/modules/ingestion/` | CSV/eSIGMA adapters, canonical normalization and ingestion routes |
+| `backend/app/modules/storage/` | Parquet datasets and ingestion persistence |
+| `backend/app/modules/sirl/` | Structured profiles and analytical context |
+| `backend/app/modules/validation/` | Rules, statistics, ML, fusion, classification, intelligence and explanations |
+| `backend/app/modules/pipeline/` | Stage orchestration, dispatch, progress and recovery |
+| `backend/app/modules/dashboard/`, `investigations/` | Analytical views, review workflow and audit history |
+| `backend/app/models.py`, `db.py` | Relational evidence model and database lifecycle |
+| `backend/tests/`, `data/samples/` | Regression suites, synthetic inputs and ground truth |
+| `frontend/` | Next.js review interface, query/table/chart components and API proxy |
 
----
-
-### A risk score should be a fact you can defend, not a guess with good marketing.
-
-</div>
+The project began as a survey-quality hackathon system. Its technical focus is the implemented data lineage, transparent scoring and investigation workflow. Documentation basis: [`50dfe46a7b5e9c67faf9505c534f6bd40d16d4e4`](https://github.com/akilanpl/survey-data-intelligence/tree/50dfe46a7b5e9c67faf9505c534f6bd40d16d4e4).
